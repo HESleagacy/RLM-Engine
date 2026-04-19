@@ -1,0 +1,8 @@
+# Runtime
+pyyaml>=6.0
+
+# Optional LLM backend: pip install -e ".[groq]"
+# groq>=0.11.0
+
+# Dev
+pytest>=7.0

@@ -1,0 +1,24 @@
+# Layered Reasoning System — default configuration
+
+project:
+  name: layered-reasoning
+
+# Layer 7 — cost & execution control
+control:
+  max_steps: 100
+  max_recursion_depth: 4
+  token_budget: 100_000
+  wall_clock_seconds: 300
+
+# Layer 3 — execution environment
+execution:
+  sandbox_strict: true
+  allowed_imports: []
+
+# Layer 4 — recursion / sub-calls
+recursion:
+  max_subcalls_per_step: 4
+
+# Layer 8 — evaluation
+evaluation:
+  benchmarks: []
