@@ -4,7 +4,7 @@ This project is a **playground and implementation guide** for building and testi
 
 It is designed as a modular, layered Python system where you can swap out planning strategies, execution environments, or LLM backends to experiment with inference-time scaling and long-context handling.
 
-## 🚀 Getting Started
+##  Getting Started
 
 ### 1. Installation
 The project uses `pyproject.toml`. For the full RLM experience (including Groq-powered LLMs), install with the `groq` extra:
@@ -31,7 +31,7 @@ PYTHONPATH=src python3 -m src.main \
   --query "What color is the sky and the ocean?"
 ```
 
-## 🏗️ Architecture: The 8-Layer Pipeline
+##  Architecture: The 8-Layer Pipeline
 
 The system is organized into 8 distinct layers, making it easy to test isolated components of the RLM reasoning chain:
 
@@ -44,7 +44,7 @@ The system is organized into 8 distinct layers, making it easy to test isolated 
 7. **Layer 7: Control** (Step limits, budget tracking, and recursion guards)
 8. **Layer 8: Evaluation** (Metrics and benchmark scaffolds)
 
-## 🛠️ Testing & Development
+##  Testing & Development
 
 ### Run all tests
 ```bash
@@ -59,14 +59,14 @@ pytest -q tests/test_execution.py
 
 ---
 
-## ✅ Completed Milestones
+##  Completed Milestones
 - [x] **Core REPL Loop**: Implemented `run_until_done` to support multi-round reasoning.
 - [x] **Stateful Execution**: Context is mounted as a `context` variable; `print()` output is captured and fed back to the LLM.
 - [x] **Recursive Tooling**: `llm_query()` is fully wired into the sandbox via `RecursionManager`.
 - [x] **Groq Integration**: Support for `llama-3.3-70b` (Root) and `llama-3.1-8b` (Sub-call) models.
 - [x] **Sandboxing**: Restricted builtins and step limiters are active by default.
 
-## ⏳ Pending Tasks & Opportunities
+##  Pending Tasks & Opportunities
 - [ ] **Benchmark Loaders**: Implement full data loaders for S-NIAH, OOLONG, and BrowseComp in Layer 8.
 - [ ] **Dynamic Cost Tracking**: Wire `BudgetManager` to actual token counts returned by the LLM metadata.
 - [ ] **Async Orchestration**: Implement non-blocking `llm_query` calls for parallel context processing.
@@ -74,4 +74,3 @@ pytest -q tests/test_execution.py
 
 ---
 
-*This project is built for experimentation. See `CONTRIBUTING.md` (or the layer sections in this README) for details on how to extend the controller or add new tools to the sandbox.*
