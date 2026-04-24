@@ -1,23 +1,30 @@
-# Layered Reasoning System — default configuration
+# RLM — Recursive Language Model Engine — default configuration
 
 project:
-  name: layered-reasoning
+  name: rlm-engine
 
 # Layer 7 — cost & execution control
 control:
   max_steps: 100
-  max_recursion_depth: 4
+  max_recursion_depth: 5          # user-specified depth limit
   token_budget: 100_000
   wall_clock_seconds: 300
 
 # Layer 3 — execution environment
 execution:
   sandbox_strict: true
-  allowed_imports: []
+  allowed_imports: []             # reserved — not yet enforced in RuntimeEngine
 
 # Layer 4 — recursion / sub-calls
 recursion:
   max_subcalls_per_step: 4
+
+# RLM loop settings (consumed by build_system() in main.py)
+rlm:
+  max_rounds: 20                  # max REPL iterations before forced finalization
+  stdout_truncation: 3000         # chars of print() output fed back per round
+  root_model: llama-3.3-70b-versatile   # stronger model for root controller
+  sub_model: llama-3.1-8b-instant       # faster/cheaper model for llm_query()
 
 # Layer 8 — evaluation
 evaluation:
