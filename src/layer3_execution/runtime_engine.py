@@ -1,7 +1,13 @@
-"""Execute generated Python; does not decide — only runs."""
+"""Execute generated Python; does not decide — only runs.
+
+Gap 3 fix: stdout from print() inside exec() is now captured via
+contextlib.redirect_stdout and returned in ExecutionResult.stdout.
+"""
 
 from __future__ import annotations
 
+import contextlib
+import io
 import traceback
 from typing import Any
 
@@ -28,7 +34,6 @@ class RuntimeEngine:
 
     def _build_globals(self) -> dict[str, Any]:
         g: dict[str, Any] = {}
-
         g["__builtins__"] = safe_builtins() if self.strict_sandbox else __builtins__
         g.update(self.state.as_dict())
         g.update(self.tools.as_namespace())
@@ -37,15 +42,22 @@ class RuntimeEngine:
     def execute(self, code: str) -> ExecutionResult:
         if self.step_limiter is not None:
             self.step_limiter.tick()
+
         g = self._build_globals()
+        buf = io.StringIO()
+
         try:
-            exec(compile(code, "<generated>", "exec"), g, g)
+            # Gap 3: redirect stdout so print() output is captured
+            with contextlib.redirect_stdout(buf):
+                exec(compile(code, "<generated>", "exec"), g, g)  # noqa: S102
         except Exception as e:  # noqa: BLE001 — surface sandbox errors
             return ExecutionResult(
                 ok=False,
                 error=f"{type(e).__name__}: {e}\n{traceback.format_exc()}",
                 locals_snapshot={},
+                stdout=buf.getvalue(),
             )
+
         # Persist user-defined names back into state (exclude builtins noise)
         for k, v in g.items():
             if k.startswith("_") or k in ("__builtins__",):
@@ -53,4 +65,10 @@ class RuntimeEngine:
             if callable(v) and k in self.tools.as_namespace():
                 continue
             self.state.set(k, v)
-        return ExecutionResult(ok=True, value=g.get("result"), locals_snapshot=self.state.as_dict())
+
+        return ExecutionResult(
+            ok=True,
+            value=g.get("result"),
+            locals_snapshot=self.state.as_dict(),
+            stdout=buf.getvalue(),
+        )
