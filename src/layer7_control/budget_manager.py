@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
 
@@ -11,14 +12,18 @@ class BudgetManager:
 
     limit: int
     used: int = 0
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def can_spend(self, n: int) -> bool:
-        return self.used + n <= self.limit
+        with self._lock:
+            return self.used + n <= self.limit
 
     def spend(self, n: int) -> None:
-        if not self.can_spend(n):
-            raise RuntimeError("budget exceeded")
-        self.used += n
+        with self._lock:
+            if self.used + n > self.limit:
+                raise RuntimeError("budget exceeded")
+            self.used += n
 
     def remaining(self) -> int:
-        return max(0, self.limit - self.used)
+        with self._lock:
+            return max(0, self.limit - self.used)

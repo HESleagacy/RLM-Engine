@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from layer7_control.budget_manager import BudgetManager
     from shared.types import ChatCallable, LLMCallable
 
 # ── Legacy single-turn prefix (backward-compatible with tests) ────────────────
@@ -98,7 +99,7 @@ def _extract_fenced_code(text: str) -> str:
 
 def _extract_repl_block(text: str) -> str | None:
     """Return the first ```repl or ```python block, or None."""
-    m = re.search(r"```(?:repl|python)\s*\\n([\\s\\S]*?)\\n```", text, re.IGNORECASE)
+    m = re.search(r"```(?:repl|python)\s*\n([\s\S]*?)\n```", text, re.IGNORECASE)
     if m:
         return m.group(1).strip()
     return None
@@ -110,10 +111,10 @@ def _coerce_to_executable(source: str) -> str:
     try:
         compile(body, "<generated>", "exec")
     except SyntaxError:
-        return f"result = {body!r}\\n"
+        return f"result = {body!r}\n"
     if "result" not in body:
-        return f"{body}\\nresult = None\\n"
-    return body if body.endswith("\\n") else body + "\\n"
+        return f"{body}\nresult = None\n"
+    return body if body.endswith("\n") else body + "\n"
 
 
 # ── StepResult ────────────────────────────────────────────────────────────────
@@ -160,9 +161,11 @@ class CodeGenerator:
         self,
         llm: "LLMCallable | None" = None,
         chat: "ChatCallable | None" = None,
+        budget: "BudgetManager | None" = None,
     ) -> None:
         self._llm = llm
         self._chat = chat  # preferred for multi-turn REPL loop
+        self.budget = budget
 
     # ── Legacy single-turn method (backward-compatible, used by tests) ─────────
 
@@ -173,8 +176,10 @@ class CodeGenerator:
                 f"{_LLM_SYSTEM_PREFIX}{instruction}\n\n"
                 f"--- Context (mounted prompt P) ---\n{context_excerpt}\n"
             )
-            raw = self._llm(prompt).strip()
-            return _coerce_to_executable(raw)
+            raw, tokens = self._llm(prompt)
+            if self.budget:
+                self.budget.spend(tokens)
+            return _coerce_to_executable(raw.strip())
         # Deterministic fallback for tests (no LLM needed)
         return f"result = {context_excerpt!r}\n"
 
@@ -207,14 +212,18 @@ class CodeGenerator:
                 messages.append(
                     {"role": "user", "content": f"REPL output:\n{h['output']}"}
                 )
-            raw = self._chat(messages)
+            raw, tokens = self._chat(messages)
+            if self.budget:
+                self.budget.spend(tokens)
 
         elif self._llm is not None:
             # Flatten history into a single prompt (degraded path)
             flat = f"{system}\n\nQuery: {query}"
             for h in history:
                 flat += f"\n\n```repl\n{h['code']}\n```\nREPL output:\n{h['output']}"
-            raw = self._llm(flat)
+            raw, tokens = self._llm(flat)
+            if self.budget:
+                self.budget.spend(tokens)
 
         else:
             # Deterministic test fallback — immediately signal done

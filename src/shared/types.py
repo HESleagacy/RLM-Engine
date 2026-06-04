@@ -30,20 +30,20 @@ class ExecutionResult:
 
 
 class LLMCallable(Protocol):
-    """Single-turn LLM: prompt → str. Used by CodeGenerator / RecursionManager."""
+    """Single-turn LLM: prompt → (response, tokens). Used by CodeGenerator / RecursionManager."""
 
-    def __call__(self, prompt: str, *, max_tokens: int | None = None) -> str: ...
+    def __call__(self, prompt: str, *, max_tokens: int | None = None) -> tuple[str, int]: ...
 
 
 class ChatCallable(Protocol):
-    """Multi-turn chat LLM: list[dict] messages → str. Used in the RLM REPL loop."""
+    """Multi-turn chat LLM: list[dict] messages → (response, tokens). Used in the RLM REPL loop."""
 
     def __call__(
         self,
         messages: list[dict[str, str]],
         *,
         max_tokens: int | None = None,
-    ) -> str: ...
+    ) -> tuple[str, int]: ...
 
 
 SubtaskHandler = Callable[[str, Mapping[str, Any]], str]

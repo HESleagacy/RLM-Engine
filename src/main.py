@@ -17,6 +17,13 @@ from layer3_execution.runtime_engine import RuntimeEngine
 from layer3_execution.state_store import StateStore
 from layer3_execution.tool_interface import ToolInterface
 from layer4_recursion.recursion_manager import RecursionManager
+from layer5_context_access import (
+    by_keyword,
+    by_regex,
+    fixed_windows,
+    peek_head,
+    peek_tail,
+)
 from layer7_control.budget_manager import BudgetManager
 from layer7_control.execution_monitor import ExecutionMonitor
 from layer7_control.recursion_guard import RecursionGuard
@@ -74,6 +81,18 @@ def build_system(
         strict_sandbox=bool(exec_cfg.get("sandbox_strict", True)),
     )
 
+    def wrap_tool(fn):
+        def wrapper(*args, **kwargs):
+            ctx_text = state.get("context", "")
+            return fn(MountedContext(text=ctx_text), *args, **kwargs)
+        return wrapper
+
+    tools.register("peek_head", wrap_tool(peek_head))
+    tools.register("peek_tail", wrap_tool(peek_tail))
+    tools.register("by_keyword", wrap_tool(by_keyword))
+    tools.register("by_regex", wrap_tool(by_regex))
+    tools.register("chunker", wrap_tool(fixed_windows))
+
     codegen: CodeGenerator | None = None
 
     if use_groq:
@@ -84,13 +103,13 @@ def build_system(
 
         # Gap 2: wire llm_query tool → RecursionManager → sub-LLM
         # Generated REPL code calls llm_query("...") which hits sub_llm
-        rec_manager = RecursionManager(guard=recursion, llm=sub_llm)
+        rec_manager = RecursionManager(guard=recursion, llm=sub_llm, budget=budget)
         tools.register("llm_query", rec_manager.run_subtask)
 
         # Root LLM: stronger model for the root controller
         root_llm = make_groq_llm(model=root_model)
         root_chat = make_groq_chat(model=root_model)
-        codegen = CodeGenerator(llm=root_llm, chat=root_chat)
+        codegen = CodeGenerator(llm=root_llm, chat=root_chat, budget=budget)
 
     controller = RootController(
         runtime,

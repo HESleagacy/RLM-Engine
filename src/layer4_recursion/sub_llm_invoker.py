@@ -10,5 +10,5 @@ if TYPE_CHECKING:
     from shared.types import LLMCallable
 
 
-def invoke(task: Subtask, llm: "LLMCallable") -> str:
+def invoke(task: Subtask, llm: "LLMCallable") -> tuple[str, int]:
     return llm(task.prompt)

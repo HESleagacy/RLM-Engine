@@ -35,7 +35,7 @@ def make_groq_llm(
 
     client = Groq(api_key=groq_api_key())
 
-    def call(prompt: str, *, max_tokens: int | None = None) -> str:
+    def call(prompt: str, *, max_tokens: int | None = None) -> tuple[str, int]:
         completion = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
@@ -43,7 +43,8 @@ def make_groq_llm(
             max_tokens=max_tokens or 1024,
         )
         msg = completion.choices[0].message
-        return (msg.content or "").strip()
+        tokens = completion.usage.total_tokens if completion.usage else 0
+        return ((msg.content or "").strip(), tokens)
 
     return call
 
@@ -63,7 +64,7 @@ def make_groq_chat(
 
     def chat(
         messages: list[dict[str, str]], *, max_tokens: int | None = None
-    ) -> str:
+    ) -> tuple[str, int]:
         completion = client.chat.completions.create(
             model=model,
             messages=messages,  # type: ignore[arg-type]
@@ -71,7 +72,8 @@ def make_groq_chat(
             max_tokens=max_tokens or 4096,
         )
         msg = completion.choices[0].message
-        return (msg.content or "").strip()
+        tokens = completion.usage.total_tokens if completion.usage else 0
+        return ((msg.content or "").strip(), tokens)
 
     return chat
 
