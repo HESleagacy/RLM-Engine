@@ -75,3 +75,22 @@ def run_benchmark(
     print(f"Avg Tokens: {avg_tokens:,.0f}")
     print(f"Avg Steps:  {avg_steps:.1f}")
     print("--------------------------\n")
+
+
+def evaluate_one(
+    gold: str,
+    predict_fn: Callable[[], str],
+    *,
+    tokens: int = 0,
+    steps: int = 0,
+) -> EvalResult:
+    """Run a single evaluation: call *predict_fn* and compare to *gold*."""
+    predicted = predict_fn()
+    return EvalResult(
+        task_id=0,
+        correct=exact_match(predicted, gold),
+        predicted=predicted,
+        gold=gold,
+        cost_tokens=tokens,
+        cost_steps=steps,
+    )

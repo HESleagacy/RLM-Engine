@@ -238,7 +238,7 @@ User provides --prompt (context) + --query
 
 # TEST STATUS
 
-**9/10 tests pass** (0.18s):
+**10/10 tests pass**:
 
 | Test | Status |
 |------|--------|
@@ -246,11 +246,11 @@ User provides --prompt (context) + --query
 | `test_context_access.py` | ✅ |
 | `test_control.py` | ✅ |
 | `test_controller.py` | ✅ |
+| `test_evaluation.py` | ✅ |
 | `test_execution.py` | ✅ |
 | `test_input_layer.py` | ✅ |
 | `test_output.py` | ✅ |
 | `test_recursion.py` | ✅ |
-| `test_evaluation.py` | ❌ ImportError (missing `evaluate_one`, `sample_task`, `trivial_example`) |
 
 ---
 
@@ -295,10 +295,10 @@ Structure (trees) beats blind recursion
 ### Resolved
 
 * ✅ **`_extract_repl_block()` regex** — was using double-escaped `\\n` / `\\s\\S` preventing match of actual newlines in LLM output. Fixed to use proper regex metacharacters.
+* ✅ **Evaluation module** — added missing `evaluate_one()` to `evaluator.py`, and `sample_task()` / `trivial_example()` to `benchmarks/__init__.py`. All 10/10 tests now pass.
 
 ### Open
 
-* ❌ **Evaluation module incomplete** — `evaluate_one`, `sample_task`, `trivial_example` referenced in `__init__.py` and tests but not implemented in `evaluator.py` / `benchmarks/__init__.py`
 * ⚠️ **`TokenTracker` unused** — instantiated in `ExecutionMonitor` but `.record()` never called; token tracking done solely through `BudgetManager.spend()`
 * ⚠️ **Sandbox escape** — `safe_builtins()` removes `__import__` but Python's `import` statement may still work in some contexts
 * ⚠️ **Planner is a stub** — minimal policy (READ_CHUNK → GENERATE_CODE → STOP), no learned planning
