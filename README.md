@@ -48,6 +48,33 @@ PYTHONPATH=src python3 -m src.main --prompt "Hello world"
 
 ---
 
+## 🎮 Demo: Consistency Challenge (RAG vs RLM)
+
+A Gradio UI that demonstrates why RLM beats RAG on fact-consistency tasks.
+
+**The problem:** Given a document with 15 facts scattered across filler paragraphs, write a story using ALL facts correctly. RAG retrieves only the top-5 chunks and often misses facts or hallucinates names. RLM programmatically searches the entire document, verifies each fact, then generates.
+
+```bash
+# Install demo dependencies
+pip install -e ".[demo]"
+
+# Run the UI
+PYTHONPATH=src GROQ_API_KEY=your_key python demo/app.py
+```
+
+Then open `http://localhost:7860` and:
+
+1. Click **🎲 Generate Document** — creates a fact-scattered document with 15 named elements
+2. Click **🚀 Run Comparison** — runs both RAG and RLM pipelines
+3. Compare stories side-by-side with **fact-accuracy scores**
+
+| Pipeline | What it does | Typical accuracy |
+|----------|-------------|-----------------|
+| **RAG** | BM25 top-5 chunks → single LLM call | ~40-60% of facts |
+| **RLM** | Full document mounted → multi-round REPL → `llm_query()` per chunk | ~80-100% of facts |
+
+---
+
 ## 🏗️ Architecture
 
 The system is organized into **8 distinct layers**, each with a single responsibility:
