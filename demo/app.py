@@ -1,26 +1,23 @@
-"""Consistency Challenge Demo — RAG vs RLM side-by-side story generation.
+"""Consistency Challenge Demo — Flask API + JS frontend.
 
 Launch:
-    pip install gradio
+    pip install flask
     PYTHONPATH=src GROQ_API_KEY=... python demo/app.py
 
-The UI lets you:
-  1. Enter or generate a fact-scattered document
-  2. Run both RAG and RLM pipelines
-  3. Compare stories side-by-side with fact-accuracy scores
+Opens at http://localhost:7860
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
 
-# Ensure src/ is on the path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))
 
-import gradio as gr
+from flask import Flask, jsonify, request, send_from_directory
 
 from layer8_evaluation.benchmarks.consistency import (
     ConsistencyResult,
@@ -29,12 +26,13 @@ from layer8_evaluation.benchmarks.consistency import (
     build_scattered_document,
 )
 
+app = Flask(__name__, static_folder=str(Path(__file__).parent / "static"))
+
 
 # ── LLM helpers ──────────────────────────────────────────────────────────────
 
 
 def _get_llm():
-    """Return a simple string→string LLM caller (Groq)."""
     try:
         from shared.groq_client import make_groq_llm
         llm = make_groq_llm()
@@ -42,7 +40,7 @@ def _get_llm():
             text, _ = llm(prompt, max_tokens=2048)
             return text
         return call
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -50,40 +48,31 @@ def _get_llm():
 
 
 def run_rag(document: str, query: str, llm_fn) -> str:
-    """Simple RAG: BM25 retrieval of top-5 chunks → single LLM call."""
     try:
         from rank_bm25 import BM25Okapi
     except ImportError:
-        return "[ERROR] rank_bm25 not installed. Run: pip install rank_bm25"
+        return "[ERROR] rank_bm25 not installed."
 
-    # Split into paragraphs as chunks
     chunks = [p.strip() for p in document.split("\n\n") if p.strip()]
     if not chunks:
-        return "[ERROR] No content in document."
+        return "[ERROR] No content."
 
-    # BM25 retrieval — top 5 chunks
     tokenized = [c.lower().split() for c in chunks]
     bm25 = BM25Okapi(tokenized)
-    query_tokens = query.lower().split()
-    top_chunks = bm25.get_top_n(query_tokens, chunks, n=5)
-
-    retrieved_context = "\n\n".join(top_chunks)
+    top_chunks = bm25.get_top_n(query.lower().split(), chunks, n=5)
 
     prompt = (
         f"You are a creative writer. Based ONLY on the following retrieved context, "
         f"write a short story (3-5 paragraphs).\n\n"
-        f"Retrieved Context:\n{retrieved_context}\n\n"
-        f"Task:\n{query}"
+        f"Retrieved Context:\n" + "\n\n".join(top_chunks) + f"\n\nTask:\n{query}"
     )
-
     return llm_fn(prompt)
 
 
 # ── RLM Pipeline ─────────────────────────────────────────────────────────────
 
 
-def run_rlm(document: str, query: str, llm_fn) -> str:
-    """RLM: mount full document, let the LLM programmatically explore it."""
+def run_rlm(document: str, query: str) -> str:
     from layer1_input.context_repr import MountedContext
     from layer1_input.raw_loader import normalize
     from layer2_controller.code_generator import CodeGenerator
@@ -98,16 +87,13 @@ def run_rlm(document: str, query: str, llm_fn) -> str:
     from layer7_control.step_limiter import StepLimiter
     from shared.groq_client import make_groq_chat, make_groq_llm
 
-    # Build the system
     steps = StepLimiter(max_steps=50)
     budget = BudgetManager(limit=50_000)
     guard = RecursionGuard(max_depth=3)
-
     state = StateStore()
     tools = ToolInterface()
     runtime = RuntimeEngine(state, tools, step_limiter=steps, strict_sandbox=True)
 
-    # Register context access tools
     def wrap_tool(fn):
         def wrapper(*args, **kwargs):
             ctx_text = state.get("context", "")
@@ -120,169 +106,99 @@ def run_rlm(document: str, query: str, llm_fn) -> str:
     tools.register("by_regex", wrap_tool(by_regex))
     tools.register("chunker", wrap_tool(fixed_windows))
 
-    # Wire sub-LLM
     sub_llm = make_groq_llm(model="llama-3.1-8b-instant")
     rec_manager = RecursionManager(guard=guard, llm=sub_llm, budget=budget)
     tools.register("llm_query", rec_manager.run_subtask)
 
-    # Wire root LLM
     root_llm = make_groq_llm(model="llama-3.3-70b-versatile")
     root_chat = make_groq_chat(model="llama-3.3-70b-versatile")
     codegen = CodeGenerator(llm=root_llm, chat=root_chat, budget=budget)
 
-    controller = RootController(
-        runtime, codegen=codegen, max_rounds=10, stdout_truncation=3000
-    )
-
+    controller = RootController(runtime, codegen=codegen, max_rounds=10, stdout_truncation=3000)
     ctx = MountedContext(text=normalize(document))
     answer = controller.run_until_done(ctx, query)
     return answer.text
 
 
-# ── Scoring ──────────────────────────────────────────────────────────────────
+# ── API Routes ───────────────────────────────────────────────────────────────
 
 
-def score_story(story: str, facts_dict: dict[str, str]) -> ConsistencyResult:
-    fact_set = FactSet(facts=facts_dict)
-    return ConsistencyResult.from_story(story, fact_set)
+@app.route("/")
+def index():
+    return send_from_directory(app.static_folder, "index.html")
 
 
-def format_result(result: ConsistencyResult) -> str:
-    lines = [
-        f"**Accuracy: {result.accuracy:.0%}** ({len(result.present)}/{len(result.present) + len(result.missing)} facts used)",
-        "",
-    ]
-    if result.present:
-        lines.append("✅ **Present:**")
-        for k in result.present:
-            lines.append(f"  - {k}: {result.fact_set.facts[k]}")
-    if result.missing:
-        lines.append("")
-        lines.append("❌ **Missing:**")
-        for k in result.missing:
-            lines.append(f"  - {k}: {result.fact_set.facts[k]}")
-    return "\n".join(lines)
-
-
-# ── Gradio UI ────────────────────────────────────────────────────────────────
-
-
-def generate_document(seed: int = 42) -> tuple[str, str]:
-    """Generate a fact-scattered document and return (document, facts_display)."""
+@app.route("/api/generate", methods=["POST"])
+def api_generate():
+    data = request.json or {}
+    seed = int(data.get("seed", 42))
     fact_set, doc = build_scattered_document(seed=seed)
-    facts_display = "\n".join(fact_set.as_list())
-    return doc, facts_display
+    return jsonify({
+        "document": doc,
+        "facts": fact_set.facts,
+    })
 
 
-def run_comparison(document: str, facts_text: str):
-    """Run both RAG and RLM, return stories + scores."""
-    llm_fn = _get_llm()
-    if llm_fn is None:
-        return (
-            "[ERROR] GROQ_API_KEY not set. Export it and restart.",
-            "[ERROR] GROQ_API_KEY not set. Export it and restart.",
-            "N/A",
-            "N/A",
-        )
+@app.route("/api/run", methods=["POST"])
+def api_run():
+    data = request.json or {}
+    document = data.get("document", "")
+    facts = data.get("facts", {})
+    pipeline = data.get("pipeline", "both")  # "rag", "rlm", or "both"
 
-    # Parse facts from display text
-    facts_dict = {}
-    for line in facts_text.strip().splitlines():
-        if "=" in line:
-            k, v = line.split("=", 1)
-            facts_dict[k.strip()] = v.strip()
+    if not document or not facts:
+        return jsonify({"error": "Missing document or facts"}), 400
 
-    if not facts_dict:
-        return "No facts found.", "No facts found.", "N/A", "N/A"
-
-    fact_set = FactSet(facts=facts_dict)
+    fact_set = FactSet(facts=facts)
     query = build_query(fact_set)
 
-    # Run RAG
-    try:
-        rag_story = run_rag(document, query, llm_fn)
-    except Exception as e:
-        rag_story = f"[RAG ERROR] {e}"
+    result = {}
 
-    # Run RLM
-    try:
-        rlm_story = run_rlm(document, query, llm_fn)
-    except Exception as e:
-        rlm_story = f"[RLM ERROR] {e}"
+    # RAG
+    if pipeline in ("rag", "both"):
+        llm_fn = _get_llm()
+        if llm_fn is None:
+            result["rag"] = {"story": "[ERROR] GROQ_API_KEY not set.", "score": {}}
+        else:
+            try:
+                rag_story = run_rag(document, query, llm_fn)
+                rag_res = ConsistencyResult.from_story(rag_story, fact_set)
+                result["rag"] = {
+                    "story": rag_story,
+                    "score": {
+                        "accuracy": rag_res.accuracy,
+                        "present": rag_res.present,
+                        "missing": rag_res.missing,
+                    },
+                }
+            except Exception as e:
+                result["rag"] = {"story": f"[ERROR] {e}", "score": {}}
 
-    # Score both
-    rag_result = score_story(rag_story, facts_dict)
-    rlm_result = score_story(rlm_story, facts_dict)
+    # RLM
+    if pipeline in ("rlm", "both"):
+        try:
+            rlm_story = run_rlm(document, query)
+            rlm_res = ConsistencyResult.from_story(rlm_story, fact_set)
+            result["rlm"] = {
+                "story": rlm_story,
+                "score": {
+                    "accuracy": rlm_res.accuracy,
+                    "present": rlm_res.present,
+                    "missing": rlm_res.missing,
+                },
+            }
+        except Exception as e:
+            result["rlm"] = {"story": f"[ERROR] {e}", "score": {}}
 
-    return rag_story, rlm_story, format_result(rag_result), format_result(rlm_result)
-
-
-def build_ui():
-    with gr.Blocks(
-        title="RLM vs RAG — Consistency Challenge",
-        theme=gr.themes.Soft(),
-    ) as app:
-        gr.Markdown(
-            "# 🧠 RLM vs RAG — Consistency Challenge\n"
-            "Generate a fact-scattered document, then compare how **RAG** (retrieval-only) "
-            "and **RLM** (recursive reasoning) handle story generation with all facts."
-        )
-
-        with gr.Row():
-            with gr.Column(scale=2):
-                document_box = gr.Textbox(
-                    label="📄 Document (facts scattered in filler text)",
-                    lines=15,
-                    placeholder="Click 'Generate Document' or paste your own...",
-                )
-            with gr.Column(scale=1):
-                facts_box = gr.Textbox(
-                    label="📋 Facts (key = value, one per line)",
-                    lines=15,
-                    placeholder="Hero = Arjun\nCity = Neo Mumbai\n...",
-                )
-
-        with gr.Row():
-            gen_btn = gr.Button("🎲 Generate Document", variant="secondary")
-            seed_input = gr.Number(label="Seed", value=42, precision=0)
-            run_btn = gr.Button("🚀 Run Comparison", variant="primary")
-
-        gr.Markdown("---")
-        gr.Markdown("## Results")
-
-        with gr.Row():
-            with gr.Column():
-                gr.Markdown("### 📦 RAG Story")
-                rag_story_box = gr.Textbox(label="RAG Output", lines=12, interactive=False)
-                rag_score_box = gr.Markdown(label="RAG Score")
-            with gr.Column():
-                gr.Markdown("### 🧠 RLM Story")
-                rlm_story_box = gr.Textbox(label="RLM Output", lines=12, interactive=False)
-                rlm_score_box = gr.Markdown(label="RLM Score")
-
-        # Wire events
-        gen_btn.click(
-            fn=generate_document,
-            inputs=[seed_input],
-            outputs=[document_box, facts_box],
-        )
-
-        run_btn.click(
-            fn=run_comparison,
-            inputs=[document_box, facts_box],
-            outputs=[rag_story_box, rlm_story_box, rag_score_box, rlm_score_box],
-        )
-
-    return app
+    return jsonify(result)
 
 
 if __name__ == "__main__":
-    # Load .env if present
     try:
         from dotenv import load_dotenv
         load_dotenv(_ROOT / ".env")
     except ImportError:
         pass
 
-    app = build_ui()
-    app.launch(share=False, server_name="0.0.0.0", server_port=7860)
+    print("🧠 RLM vs RAG Demo — http://localhost:7860")
+    app.run(host="0.0.0.0", port=7860, debug=False)
