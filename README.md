@@ -1,76 +1,227 @@
-# Recursive Language Model (RLM) Playground
+# 🧠 RLM Engine — Recursive Language Model
 
-This project is a **playground and implementation guide** for building and testing Recursive Language Models (RLMs) as described in the paper *Recursive Language Models* (Khattab et al., 2025). 
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://img.shields.io/badge/tests-10%2F10%20passing-brightgreen.svg)](#-testing)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-It is designed as a modular, layered Python system where you can swap out planning strategies, execution environments, or LLM backends to experiment with inference-time scaling and long-context handling.
+> **A controlled reasoning engine that thinks under control, under cost, and under verification.**
 
-##  Getting Started
+Implementation of the **Recursive Language Model** architecture from *Khattab et al., 2025*. Instead of dumping entire documents into an LLM's context window, the RLM generates executable Python code in a REPL loop to programmatically explore, chunk, and reason over arbitrarily long contexts.
 
-### 1. Installation
-The project uses `pyproject.toml`. For the full RLM experience (including Groq-powered LLMs), install with the `groq` extra:
+---
+
+## ⚡ Quick Start
+
+### 1. Install
 
 ```bash
+# Core install
+pip install -e .
+
+# With Groq LLM support (recommended)
 pip install -e ".[groq]"
+
+# Dev dependencies
+pip install -e ".[dev]"
 ```
 
-*Note: If you have an older version of setuptools, a `setup.py` shim is provided to enable editable installs.*
-
-### 2. Environment Setup
-Create a `.env` file in the root directory and add your Groq API key:
-```env
-GROQ_API_KEY=your_key_here
-```
-
-### 3. Run the RLM Playground
-You can run the full recursive loop directly from the CLI. This mounts your prompt as a "long document" (`context`) and allows the LLM to programmatically explore it to answer your query.
+### 2. Configure
 
 ```bash
+cp .env.example .env
+# Edit .env and add your Groq API key:
+# GROQ_API_KEY=gsk_...
+```
+
+### 3. Run
+
+```bash
+# Full RLM reasoning loop
 PYTHONPATH=src python3 -m src.main \
   --use-groq \
-  --prompt "The sky is blue. The grass is green. The sun is yellow. The ocean is deep blue. Mountains are tall." \
+  --prompt "The sky is blue. The grass is green. The sun is yellow. The ocean is deep blue." \
   --query "What color is the sky and the ocean?"
+
+# Single-round mode (no LLM required)
+PYTHONPATH=src python3 -m src.main --prompt "Hello world"
 ```
 
-##  Architecture: The 8-Layer Pipeline
+---
 
-The system is organized into 8 distinct layers, making it easy to test isolated components of the RLM reasoning chain:
+## 🏗️ Architecture
 
-1. **Layer 1: Input** (Raw loader, immutable prompt `P`)
-2. **Layer 2: Controller** (**Hot Path**: Multi-round REPL loop, Planner, CodeGen)
-3. **Layer 3: Execution** (Python `exec()` sandbox with stdout capture)
-4. **Layer 4: Recursion** (`llm_query` tool for sub-LLM orchestration)
-5. **Layer 5: Context Access** (Probing, filtering, and chunking tools)
-6. **Layer 6: Output** (Intermediate store, aggregator, and `FINAL()` answer locking)
-7. **Layer 7: Control** (Step limits, budget tracking, and recursion guards)
-8. **Layer 8: Evaluation** (Metrics and benchmark scaffolds)
+The system is organized into **8 distinct layers**, each with a single responsibility:
 
-##  Testing & Development
+```
+┌─────────────────────────────────────────────────────────┐
+│                    CLI / main.py                        │
+├─────────────────────────────────────────────────────────┤
+│  L1 Input        │ Mount raw text as immutable P       │
+├──────────────────┼──────────────────────────────────────┤
+│  L2 Controller   │ REPL loop: plan → codegen → exec    │  ← Hot Path
+├──────────────────┼──────────────────────────────────────┤
+│  L3 Execution    │ Python exec() sandbox + stdout       │
+├──────────────────┼──────────────────────────────────────┤
+│  L4 Recursion    │ llm_query() sub-LLM orchestration   │
+├──────────────────┼──────────────────────────────────────┤
+│  L5 Context      │ Probe, filter, chunk, traverse       │
+├──────────────────┼──────────────────────────────────────┤
+│  L6 Output       │ Intermediate store → FINAL() lock    │
+├──────────────────┼──────────────────────────────────────┤
+│  L7 Control      │ Step limits, budget, recursion guard  │
+├──────────────────┼──────────────────────────────────────┤
+│  L8 Evaluation   │ Benchmarks, baselines, metrics        │
+└─────────────────────────────────────────────────────────┘
+```
 
-### Run all tests
+### How It Works
+
+1. **Mount** — Your prompt/document is mounted as an immutable `context` variable in a Python sandbox
+2. **Generate** — The root LLM (Llama 3.3-70B) generates Python code to explore the context
+3. **Execute** — Code runs in a sandboxed `exec()` with stdout capture
+4. **Recurse** — Generated code can call `llm_query()` to delegate to a sub-LLM (Llama 3.1-8B)
+5. **Iterate** — REPL output feeds back to the LLM for the next round
+6. **Finalize** — The LLM emits `FINAL(answer)` to lock the output
+
+### Tools Available in the REPL
+
+| Tool | Description |
+|------|-------------|
+| `llm_query(prompt)` | Query a sub-LLM (~200K char context) |
+| `peek_head(n)` | Read first `n` chars of context |
+| `peek_tail(n)` | Read last `n` chars of context |
+| `by_keyword(*kw)` | Filter lines by keywords |
+| `by_regex(pattern)` | Filter lines by regex |
+| `chunker(size, overlap)` | Split context into fixed windows |
+| `print()` | Observe intermediate results |
+
+---
+
+## 🔧 Configuration
+
+All settings live in [`configs/default.yaml`](configs/default.yaml):
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `max_steps` | 100 | Hard cap on execution steps |
+| `max_recursion_depth` | 5 | Max depth for nested `llm_query()` calls |
+| `token_budget` | 100,000 | Total token budget across all LLM calls |
+| `max_rounds` | 20 | Max REPL iterations before forced finalization |
+| `stdout_truncation` | 3,000 | Chars of `print()` output fed back per round |
+| `root_model` | `llama-3.3-70b-versatile` | Root controller LLM |
+| `sub_model` | `llama-3.1-8b-instant` | Sub-call LLM for `llm_query()` |
+| `sandbox_strict` | `true` | Restrict dangerous builtins |
+
+---
+
+## 🧪 Testing
+
 ```bash
+# Run all tests
 pytest -q
-```
 
-### Layer-by-Layer Verification
-Each layer has a dedicated test suite under `tests/`. For example, to verify the execution environment:
-```bash
+# Run a specific layer's tests
 pytest -q tests/test_execution.py
+
+# Verbose output
+pytest -v
+```
+
+**Current status: 10/10 tests passing ✅**
+
+| Test Suite | Coverage |
+|------------|----------|
+| `test_input_layer.py` | Layer 1: normalize, mount, metadata |
+| `test_controller.py` | Layer 2: single-round controller flow |
+| `test_code_generator.py` | Layer 2: LLM output → executable Python |
+| `test_execution.py` | Layer 3: sandboxed exec + result capture |
+| `test_recursion.py` | Layer 4: sub-LLM invocation via guard |
+| `test_context_access.py` | Layer 5: probe, filter, chunk |
+| `test_output.py` | Layer 6: intermediate → FINAL aggregation |
+| `test_control.py` | Layer 7: step limits, budget, recursion guard |
+| `test_evaluation.py` | Layer 8: metrics + benchmark smoke test |
+
+---
+
+## 📊 Evaluation & Benchmarks
+
+Layer 8 includes benchmark loaders and baseline agents for systematic evaluation:
+
+### Benchmarks
+
+| Benchmark | Complexity | Source |
+|-----------|-----------|--------|
+| **S-NIAH** | Constant | Synthetic needle-in-haystack (2^13 → 2^18 chars) |
+| **BrowseComp** | Multi-hop | Tevatron/browsecomp-plus (1K documents) |
+| **OOLONG** | Linear | oolongbench/oolong-synth (trec_coarse) |
+| **OOLONG-Pairs** | Quadratic | Pair-aggregation over OOLONG contexts |
+| **CodeQA** | Variable | THUDM/LongBench-v2 code repository understanding |
+
+### Baseline Agents
+
+| Agent | Strategy |
+|-------|----------|
+| **CodeAct + BM25** | BM25 retrieval + Python code execution |
+| **Summary Agent** | Iterative chunk summarization |
+
+### Metrics
+
+- `exact_match()` / `f1_token_overlap()` — accuracy
+- `total_cost()` — token + step cost tracking
+- `approx_complexity()` — scaling behavior classification
+
+---
+
+## 📁 Project Structure
+
+```
+RLM-Engine/
+├── configs/default.yaml          # Runtime configuration
+├── src/
+│   ├── main.py                   # CLI entry point + system wiring
+│   ├── layer1_input/             # Raw loader, MountedContext, metadata
+│   ├── layer2_controller/        # RootController, CodeGenerator, Planner
+│   ├── layer3_execution/         # RuntimeEngine, sandbox, StateStore
+│   ├── layer4_recursion/         # RecursionManager, sub-LLM invoker
+│   ├── layer5_context_access/    # Probe, filter, chunker, traversal
+│   ├── layer6_output/            # OutputManager, FINAL() finalizer
+│   ├── layer7_control/           # Budget, steps, recursion guards
+│   ├── layer8_evaluation/        # Benchmarks, baselines, metrics
+│   └── shared/                   # Types, constants, Groq client, utils
+├── tests/                        # Per-layer test suites (10/10 passing)
+├── pyproject.toml                # Build config + dependencies
+└── CONTEXT.md                    # Detailed architecture analysis
 ```
 
 ---
 
-##  Completed Milestones
-- [x] **Core REPL Loop**: Implemented `run_until_done` to support multi-round reasoning.
-- [x] **Stateful Execution**: Context is mounted as a `context` variable; `print()` output is captured and fed back to the LLM.
-- [x] **Recursive Tooling**: `llm_query()` is fully wired into the sandbox via `RecursionManager`.
-- [x] **Groq Integration**: Support for `llama-3.3-70b` (Root) and `llama-3.1-8b` (Sub-call) models.
-- [x] **Sandboxing**: Restricted builtins and step limiters are active by default.
+## ✅ Completed Milestones
 
-##  Pending Tasks & Opportunities
-- [ ] **Benchmark Loaders**: Implement full data loaders for S-NIAH, OOLONG, and BrowseComp in Layer 8.
-- [ ] **Dynamic Cost Tracking**: Wire `BudgetManager` to actual token counts returned by the LLM metadata.
-- [ ] **Async Orchestration**: Implement non-blocking `llm_query` calls for parallel context processing.
-- [ ] **Layer 5 Integration**: Formally expose `peek_head`, `by_keyword`, and `chunker` as registered tools in the REPL.
+- [x] **Core REPL Loop** — `run_until_done()` drives multi-round reasoning with `FINAL()` termination
+- [x] **Stateful Execution** — Context mounted as variable; `print()` output captured and fed back
+- [x] **Recursive Tooling** — `llm_query()` wired into sandbox via `RecursionManager` with depth guards
+- [x] **Groq Integration** — Dual-model setup: Llama 3.3-70B (root) + Llama 3.1-8B (sub-calls)
+- [x] **Sandboxing** — Restricted builtins (`open`, `eval`, `exec`, `__import__` removed)
+- [x] **Benchmark Suite** — S-NIAH, BrowseComp, OOLONG, OOLONG-Pairs, CodeQA with streaming loaders
+- [x] **Baseline Agents** — CodeAct+BM25 and Summary Agent for comparison
+- [x] **Full Test Coverage** — 10/10 tests across all 8 layers
+
+## 🔮 Roadmap
+
+- [ ] **Dynamic Cost Tracking** — Wire `TokenTracker` to actual LLM token metadata
+- [ ] **Async Orchestration** — Non-blocking `llm_query()` for parallel chunk processing
+- [ ] **Learned Planning** — Replace stub `Planner` with trained policy
+- [ ] **Execution Trees** — Replace flat recursion with structured tree/graph execution
+- [ ] **Verification Layer** — Add output validation before `FINAL()` locking
+- [ ] **Hybrid Symbolic + LLM** — Integrate symbolic reasoning for deterministic sub-problems
 
 ---
 
+## 🔗 References
+
+- Khattab et al., *Recursive Language Models*, 2025
+- System prompt adapted from Appendix D.1 of the paper
+
+---
+
+*Built as a research playground — not a production system. Contributions welcome.*
