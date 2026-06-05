@@ -64,14 +64,28 @@ _FILLER_PARAGRAPHS = [
 ]
 
 
+# Narrative wrappers — each fact is buried inside a longer paragraph so
+# BM25 keyword matching cannot easily surface it.
+_NARRATIVE_TEMPLATES = [
+    "After weeks of preparation, the team confirmed that the {key} was none other than {value}. The decision had been debated for months, but the evidence was overwhelming. Everyone agreed it was time to move forward.",
+    "According to the recovered archives, the {key} is identified as {value}. Scholars had long suspected this, though the confirmation only came after cross-referencing multiple independent sources from the outer colonies.",
+    "Deep in the classified files, a single entry stood out: the {key} — {value}. The notation was handwritten, suggesting it predated the digital era entirely. Its significance would only become clear much later.",
+    "Witnesses from the northern district reported that the {key} is {value}. Their testimony was corroborated by sensor data collected during the incident, though official channels remained silent on the matter.",
+    "The encrypted transmission, once decoded, revealed a critical detail: the {key} is {value}. Intelligence analysts spent three days verifying the information before passing it up the chain of command.",
+]
+
+
 def build_scattered_document(
     facts: dict[str, str] | None = None,
     *,
-    num_filler: int = 10,
+    num_filler: int = 20,
     seed: int | None = None,
 ) -> tuple[FactSet, str]:
     """
     Build a document with facts scattered among filler paragraphs.
+
+    Facts are embedded in narrative paragraphs (not obvious labels) so that
+    BM25 keyword retrieval struggles to surface them all in a few chunks.
 
     Returns (fact_set, document_text).
     """
@@ -81,15 +95,11 @@ def build_scattered_document(
     facts = facts or dict(_DEFAULT_FACTS)
     fact_set = FactSet(facts=facts)
 
-    # Build fact paragraphs — each fact is embedded in a sentence
+    # Build fact paragraphs — each fact is buried in a narrative wrapper
     fact_paragraphs = []
     for key, value in facts.items():
-        templates = [
-            f"FACT: The {key} is {value}.",
-            f"Record: {key} — {value}.",
-            f"[Data Entry] {key}: {value}.",
-        ]
-        fact_paragraphs.append(random.choice(templates))
+        template = random.choice(_NARRATIVE_TEMPLATES)
+        fact_paragraphs.append(template.format(key=key, value=value))
 
     # Pick filler paragraphs (with repetition if needed)
     fillers = [random.choice(_FILLER_PARAGRAPHS) for _ in range(num_filler)]

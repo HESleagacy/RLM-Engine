@@ -48,6 +48,12 @@ def _get_llm():
 
 
 def run_rag(document: str, query: str, llm_fn) -> str:
+    """RAG baseline — BM25 top-3 retrieval → single LLM call.
+
+    Intentionally limited: retrieves only 3 chunks (not the full document),
+    and the prompt does NOT list the required fact values — the LLM must
+    rely solely on what BM25 retrieved.
+    """
     try:
         from rank_bm25 import BM25Okapi
     except ImportError:
@@ -59,12 +65,26 @@ def run_rag(document: str, query: str, llm_fn) -> str:
 
     tokenized = [c.lower().split() for c in chunks]
     bm25 = BM25Okapi(tokenized)
-    top_chunks = bm25.get_top_n(query.lower().split(), chunks, n=5)
+    # Only retrieve top-3 chunks — this is the core RAG limitation.
+    # With 15 facts scattered across ~35 paragraphs, 3 chunks will
+    # typically contain only 2-4 facts.
+    top_chunks = bm25.get_top_n(query.lower().split(), chunks, n=3)
 
+    # CRITICAL: Do NOT pass the full fact list to the LLM.
+    # RAG's weakness is that it can only use what was retrieved.
+    # If we gave it the fact names, the LLM would use prior knowledge to fill gaps.
     prompt = (
-        f"You are a creative writer. Based ONLY on the following retrieved context, "
-        f"write a short story (3-5 paragraphs).\n\n"
-        f"Retrieved Context:\n" + "\n\n".join(top_chunks) + f"\n\nTask:\n{query}"
+        "You are a creative writer. Below are some excerpts retrieved from a larger document. "
+        "Write a short story (3-5 paragraphs) that incorporates ALL the factual details "
+        "(character names, locations, objects, organizations) found in these excerpts.\n\n"
+        "STRICT RULES:\n"
+        "- Use ONLY names, places, and details that explicitly appear in the excerpts below.\n"
+        "- Do NOT invent any character names, place names, or object names.\n"
+        "- If the excerpts mention a name or detail, you MUST include it.\n"
+        "- Do NOT add any proper nouns that are not in the excerpts.\n\n"
+        f"--- RETRIEVED EXCERPTS ---\n\n" + "\n\n---\n\n".join(top_chunks) +
+        "\n\n--- END OF EXCERPTS ---\n\n"
+        "Now write the story using only the details from the excerpts above."
     )
     return llm_fn(prompt)
 
