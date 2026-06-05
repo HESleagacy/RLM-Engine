@@ -47,12 +47,12 @@ def _get_llm():
 # ── RAG Pipeline ─────────────────────────────────────────────────────────────
 
 
-def run_rag(document: str, query: str, llm_fn) -> str:
-    """RAG baseline — BM25 top-3 retrieval → single LLM call.
+def run_rag(document: str, fact_set, llm_fn) -> str:
+    """RAG baseline — BM25 top-5 retrieval → single LLM call.
 
-    Intentionally limited: retrieves only 3 chunks (not the full document),
-    and the prompt does NOT list the required fact values — the LLM must
-    rely solely on what BM25 retrieved.
+    Retrieves top-5 chunks. The prompt tells the LLM which fact *categories*
+    to look for (Hero, City, etc.) but NOT the actual values — so the LLM
+    can only use values present in the retrieved chunks.
     """
     try:
         from rank_bm25 import BM25Okapi
@@ -65,26 +65,25 @@ def run_rag(document: str, query: str, llm_fn) -> str:
 
     tokenized = [c.lower().split() for c in chunks]
     bm25 = BM25Okapi(tokenized)
-    # Only retrieve top-3 chunks — this is the core RAG limitation.
-    # With 15 facts scattered across ~35 paragraphs, 3 chunks will
-    # typically contain only 2-4 facts.
-    top_chunks = bm25.get_top_n(query.lower().split(), chunks, n=3)
+    # Generic retrieval query — does NOT contain the actual fact values
+    retrieval_query = "hero character city villain artifact weapon organization planet ship mentor rival"
+    top_chunks = bm25.get_top_n(retrieval_query.lower().split(), chunks, n=7)
 
-    # CRITICAL: Do NOT pass the full fact list to the LLM.
-    # RAG's weakness is that it can only use what was retrieved.
-    # If we gave it the fact names, the LLM would use prior knowledge to fill gaps.
+    # List fact KEYS only (Hero, City, Villain...) — NOT the values (Arjun, Neo Mumbai...)
+    key_list = ", ".join(fact_set.facts.keys())
+
     prompt = (
-        "You are a creative writer. Below are some excerpts retrieved from a larger document. "
-        "Write a short story (3-5 paragraphs) that incorporates ALL the factual details "
-        "(character names, locations, objects, organizations) found in these excerpts.\n\n"
+        "You are a creative writer. Based ONLY on the following retrieved context, "
+        "write a short story (3-5 paragraphs).\n\n"
+        f"The story should try to include these elements: {key_list}.\n\n"
         "STRICT RULES:\n"
-        "- Use ONLY names, places, and details that explicitly appear in the excerpts below.\n"
-        "- Do NOT invent any character names, place names, or object names.\n"
-        "- If the excerpts mention a name or detail, you MUST include it.\n"
-        "- Do NOT add any proper nouns that are not in the excerpts.\n\n"
-        f"--- RETRIEVED EXCERPTS ---\n\n" + "\n\n---\n\n".join(top_chunks) +
-        "\n\n--- END OF EXCERPTS ---\n\n"
-        "Now write the story using only the details from the excerpts above."
+        "- You may ONLY use names, places, and details that EXPLICITLY appear "
+        "in the retrieved context below.\n"
+        "- If an element's specific name/value is NOT in the context, OMIT it.\n"
+        "- Do NOT guess, invent, or hallucinate any proper nouns.\n\n"
+        f"Retrieved Context:\n\n" + "\n\n---\n\n".join(top_chunks) +
+        "\n\n---\n\n"
+        "Now write the story using only details found in the context above."
     )
     return llm_fn(prompt)
 
@@ -181,7 +180,7 @@ def api_run():
             result["rag"] = {"story": "[ERROR] GROQ_API_KEY not set.", "score": {}}
         else:
             try:
-                rag_story = run_rag(document, query, llm_fn)
+                rag_story = run_rag(document, fact_set, llm_fn)
                 rag_res = ConsistencyResult.from_story(rag_story, fact_set)
                 result["rag"] = {
                     "story": rag_story,
