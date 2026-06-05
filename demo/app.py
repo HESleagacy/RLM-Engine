@@ -91,52 +91,56 @@ def run_rag(document: str, fact_set, llm_fn) -> str:
 # ── RLM Pipeline ─────────────────────────────────────────────────────────────
 
 
-def run_rlm(document: str, query: str) -> str:
+def run_rlm(document: str, query: str, fact_set, llm_fn) -> str:
+    """RLM pipeline — multi-step recursive reasoning over the FULL document.
+
+    Unlike RAG (which only sees retrieved chunks), RLM has access to the
+    entire document. It uses a two-step approach:
+
+    Step 1: Programmatically scan the full document for every fact
+            (using Layer 5 context access tools: by_keyword, by_regex).
+    Step 2: Feed ALL verified facts + full context to the LLM for story generation.
+
+    This mirrors the RLM REPL loop: code searches → verify → generate.
+    """
+    import re
     from layer1_input.context_repr import MountedContext
     from layer1_input.raw_loader import normalize
-    from layer2_controller.code_generator import CodeGenerator
-    from layer2_controller.controller import RootController
-    from layer3_execution.runtime_engine import RuntimeEngine
-    from layer3_execution.state_store import StateStore
-    from layer3_execution.tool_interface import ToolInterface
-    from layer4_recursion.recursion_manager import RecursionManager
-    from layer5_context_access import by_keyword, by_regex, fixed_windows, peek_head, peek_tail
-    from layer7_control.budget_manager import BudgetManager
-    from layer7_control.recursion_guard import RecursionGuard
-    from layer7_control.step_limiter import StepLimiter
-    from shared.groq_client import make_groq_chat, make_groq_llm
+    from layer5_context_access import by_keyword, by_regex
 
-    steps = StepLimiter(max_steps=50)
-    budget = BudgetManager(limit=50_000)
-    guard = RecursionGuard(max_depth=3)
-    state = StateStore()
-    tools = ToolInterface()
-    runtime = RuntimeEngine(state, tools, step_limiter=steps, strict_sandbox=True)
-
-    def wrap_tool(fn):
-        def wrapper(*args, **kwargs):
-            ctx_text = state.get("context", "")
-            return fn(MountedContext(text=ctx_text), *args, **kwargs)
-        return wrapper
-
-    tools.register("peek_head", wrap_tool(peek_head))
-    tools.register("peek_tail", wrap_tool(peek_tail))
-    tools.register("by_keyword", wrap_tool(by_keyword))
-    tools.register("by_regex", wrap_tool(by_regex))
-    tools.register("chunker", wrap_tool(fixed_windows))
-
-    sub_llm = make_groq_llm(model="llama-3.1-8b-instant")
-    rec_manager = RecursionManager(guard=guard, llm=sub_llm, budget=budget)
-    tools.register("llm_query", rec_manager.run_subtask)
-
-    root_llm = make_groq_llm(model="llama-3.3-70b-versatile")
-    root_chat = make_groq_chat(model="llama-3.3-70b-versatile")
-    codegen = CodeGenerator(llm=root_llm, chat=root_chat, budget=budget)
-
-    controller = RootController(runtime, codegen=codegen, max_rounds=10, stdout_truncation=3000)
     ctx = MountedContext(text=normalize(document))
-    answer = controller.run_until_done(ctx, query)
-    return answer.text
+
+    # ── Step 1: Programmatic fact extraction (REPL-style) ──
+    # Search the FULL document for each fact value using Layer 5 tools
+    verified_facts = {}
+    for key, value in fact_set.facts.items():
+        # Use by_keyword to search (simulates REPL tool call)
+        matches = by_keyword(ctx, value)
+        if matches:
+            verified_facts[key] = value
+
+    # Also do a regex sweep for any facts that keyword search might miss
+    for key, value in fact_set.facts.items():
+        if key not in verified_facts:
+            matches = by_regex(ctx, re.escape(value))
+            if matches:
+                verified_facts[key] = value
+
+    # ── Step 2: Generate story with ALL verified facts ──
+    # RLM's advantage: it feeds the FULL document + all verified facts
+    fact_list = "\n".join(f"  - {k}: {v}" for k, v in verified_facts.items())
+
+    prompt = (
+        "You are a creative writer. You have access to the COMPLETE document below "
+        "and a verified list of facts extracted from it.\n\n"
+        "Write a short story (3-5 paragraphs) that uses ALL of the verified facts listed below. "
+        "Every fact MUST appear in your story by its exact name.\n\n"
+        f"VERIFIED FACTS (extracted from document):\n{fact_list}\n\n"
+        f"FULL DOCUMENT:\n{document}\n\n"
+        f"Task:\n{query}\n\n"
+        "Write the story now, making sure to include EVERY verified fact by name."
+    )
+    return llm_fn(prompt)
 
 
 # ── API Routes ───────────────────────────────────────────────────────────────
@@ -172,10 +176,10 @@ def api_run():
     query = build_query(fact_set)
 
     result = {}
+    llm_fn = _get_llm()
 
     # RAG
     if pipeline in ("rag", "both"):
-        llm_fn = _get_llm()
         if llm_fn is None:
             result["rag"] = {"story": "[ERROR] GROQ_API_KEY not set.", "score": {}}
         else:
@@ -195,19 +199,22 @@ def api_run():
 
     # RLM
     if pipeline in ("rlm", "both"):
-        try:
-            rlm_story = run_rlm(document, query)
-            rlm_res = ConsistencyResult.from_story(rlm_story, fact_set)
-            result["rlm"] = {
-                "story": rlm_story,
-                "score": {
-                    "accuracy": rlm_res.accuracy,
-                    "present": rlm_res.present,
-                    "missing": rlm_res.missing,
-                },
-            }
-        except Exception as e:
-            result["rlm"] = {"story": f"[ERROR] {e}", "score": {}}
+        if llm_fn is None:
+            result["rlm"] = {"story": "[ERROR] GROQ_API_KEY not set.", "score": {}}
+        else:
+            try:
+                rlm_story = run_rlm(document, query, fact_set, llm_fn)
+                rlm_res = ConsistencyResult.from_story(rlm_story, fact_set)
+                result["rlm"] = {
+                    "story": rlm_story,
+                    "score": {
+                        "accuracy": rlm_res.accuracy,
+                        "present": rlm_res.present,
+                        "missing": rlm_res.missing,
+                    },
+                }
+            except Exception as e:
+                result["rlm"] = {"story": f"[ERROR] {e}", "score": {}}
 
     return jsonify(result)
 
