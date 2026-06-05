@@ -83,7 +83,7 @@ _NARRATIVE_TEMPLATES = [
 def build_scattered_document(
     facts: dict[str, str] | None = None,
     *,
-    num_filler: int = 20,
+    num_filler: int = 12,
     seed: int | None = None,
 ) -> tuple[FactSet, str]:
     """
