@@ -394,8 +394,13 @@
     document.getElementById('btnRun').disabled = disabled;
   }
 
+  // Randomize seed on page load
+  document.getElementById('seed').value = Math.floor(Math.random() * 9999) + 1;
+
   async function generateDoc() {
-    const seed = parseInt(document.getElementById('seed').value) || 42;
+    // Auto-randomize seed each time
+    const seed = Math.floor(Math.random() * 9999) + 1;
+    document.getElementById('seed').value = seed;
     setStatus('Generating document...');
     setProgress(true);
     setButtons(true);

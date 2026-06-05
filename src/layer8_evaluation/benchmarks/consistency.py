@@ -30,25 +30,30 @@ class FactSet:
         return sum(checks.values()) / len(checks)
 
 
-# ── Default fact templates ────────────────────────────────────────────────────
+# ── Fact pools — each key has multiple possible values ────────────────────────
 
-_DEFAULT_FACTS = {
-    "Hero": "Arjun",
-    "Robot Companion": "Veda",
-    "City": "Neo Mumbai",
-    "Villain": "Kaal",
-    "Artifact": "Quantum Crown",
-    "Weapon": "Plasma Bow",
-    "Organization": "The Syndicate",
-    "Planet": "Prithvi-7",
-    "Ship": "Garuda",
-    "Mentor": "Dr. Meera Iyer",
-    "Power Source": "Nanocore Crystal",
-    "Rival": "Zara",
-    "Hidden Base": "Undersea Citadel",
-    "Ancient Race": "The Devas",
-    "Final Battle Location": "Obsidian Spire",
+_FACT_POOLS: dict[str, list[str]] = {
+    "Hero": ["Arjun", "Kira Tanaka", "Osei Mensah", "Lena Volkov", "Ravi Sharma"],
+    "Robot Companion": ["Veda", "AXIOM-7", "Pixel", "Nyx", "Bolt"],
+    "City": ["Neo Mumbai", "Arcadia Prime", "Skyfall City", "New Kyoto", "Solaris"],
+    "Villain": ["Kaal", "The Architect", "Morrigan", "Draven Voss", "Cipher"],
+    "Artifact": ["Quantum Crown", "Starfire Amulet", "Void Compass", "Eternity Lens", "Shadow Key"],
+    "Weapon": ["Plasma Bow", "Graviton Blade", "Pulse Gauntlet", "Storm Lance", "Photon Whip"],
+    "Organization": ["The Syndicate", "Order of Ash", "Crimson Pact", "Iron Veil", "The Collective"],
+    "Planet": ["Prithvi-7", "Elysium-4", "Tartarus", "Nova Centauri", "Kepler-22b"],
+    "Ship": ["Garuda", "Starhawk", "Eclipse", "Nomad", "Tempest"],
+    "Mentor": ["Dr. Meera Iyer", "Professor Okafor", "Master Ren", "Admiral Vasquez", "Elder Suki"],
+    "Power Source": ["Nanocore Crystal", "Fusion Heart", "Dark Matter Shard", "Aether Stone", "Plasma Core"],
+    "Rival": ["Zara", "Marcus Flint", "Yuki Sato", "Dante", "Selene"],
+    "Hidden Base": ["Undersea Citadel", "Orbital Fortress", "Glacier Vault", "Desert Nexus", "Shadow Spire"],
+    "Ancient Race": ["The Devas", "The Precursors", "The Eternals", "The Architects", "The Luminari"],
+    "Final Battle Location": ["Obsidian Spire", "The Crucible", "Shattered Plains", "Void Gate", "Crimson Peaks"],
 }
+
+
+def _random_facts(rng: random.Random) -> dict[str, str]:
+    """Pick one random value per fact key."""
+    return {key: rng.choice(values) for key, values in _FACT_POOLS.items()}
 
 _FILLER_PARAGRAPHS = [
     "The markets were bustling with traders from distant colonies. Spices, synthetic fabrics, and quantum chips changed hands in rapid succession. Children ran between the stalls, laughing at holographic street performers.",
@@ -89,24 +94,24 @@ def build_scattered_document(
 
     Returns (fact_set, document_text).
     """
-    if seed is not None:
-        random.seed(seed)
+    rng = random.Random(seed)
 
-    facts = facts or dict(_DEFAULT_FACTS)
+    if facts is None:
+        facts = _random_facts(rng)
     fact_set = FactSet(facts=facts)
 
     # Build fact paragraphs — each fact is buried in a narrative wrapper
     fact_paragraphs = []
     for key, value in facts.items():
-        template = random.choice(_NARRATIVE_TEMPLATES)
+        template = rng.choice(_NARRATIVE_TEMPLATES)
         fact_paragraphs.append(template.format(key=key, value=value))
 
     # Pick filler paragraphs (with repetition if needed)
-    fillers = [random.choice(_FILLER_PARAGRAPHS) for _ in range(num_filler)]
+    fillers = [rng.choice(_FILLER_PARAGRAPHS) for _ in range(num_filler)]
 
     # Interleave: scatter facts among fillers
     all_blocks = fillers + fact_paragraphs
-    random.shuffle(all_blocks)
+    rng.shuffle(all_blocks)
 
     document = "\n\n".join(all_blocks)
     return fact_set, document
