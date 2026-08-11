@@ -14,11 +14,17 @@ class BudgetManager:
     used: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
+    def __post_init__(self) -> None:
+        if self.limit < 0 or self.used < 0:
+            raise ValueError("budget limit and used amount must be non-negative")
+
     def can_spend(self, n: int) -> bool:
         with self._lock:
             return self.used + n <= self.limit
 
     def spend(self, n: int) -> None:
+        if n < 0:
+            raise ValueError("spend amount must be non-negative")
         with self._lock:
             if self.used + n > self.limit:
                 raise RuntimeError("budget exceeded")

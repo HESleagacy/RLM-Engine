@@ -13,7 +13,6 @@ control:
 # Layer 3 — execution environment
 execution:
   sandbox_strict: true
-  allowed_imports: []             # reserved — not yet enforced in RuntimeEngine
 
 # Layer 4 — recursion / sub-calls
 recursion:

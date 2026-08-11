@@ -7,6 +7,7 @@ tool in ToolInterface so generated REPL code can call llm_query(...).
 from __future__ import annotations
 
 import argparse
+import importlib.resources
 from pathlib import Path
 
 from layer1_input.context_repr import MountedContext
@@ -43,12 +44,19 @@ def _load_dotenv_if_present() -> None:
     load_dotenv(env_path)
 
 
+def default_config_path() -> str:
+    source_path = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
+    if source_path.is_file():
+        return str(source_path)
+    return str(importlib.resources.files("configs") / "default.yaml")
+
+
 def build_system(
     config_path: str | Path,
     *,
     use_groq: bool = False,
-    root_model: str = "llama-3.3-70b-versatile",
-    sub_model: str = "llama-3.1-8b-instant",
+    root_model: str | None = None,
+    sub_model: str | None = None,
 ) -> tuple[RootController, ExecutionMonitor]:
     cfg = load_yaml_config(config_path)
     ctrl_cfg = cfg.get("control", {})
@@ -63,9 +71,9 @@ def build_system(
     # RLM loop config
     max_rounds = int(rlm_cfg.get("max_rounds", 20))
     stdout_trunc = int(rlm_cfg.get("stdout_truncation", 3000))
-    # Override models from config if not passed explicitly via CLI
-    root_model = rlm_cfg.get("root_model", root_model)
-    sub_model = rlm_cfg.get("sub_model", sub_model)
+    root_model = root_model or rlm_cfg.get("root_model", "llama-3.3-70b-versatile")
+    sub_model = sub_model or rlm_cfg.get("sub_model", "llama-3.1-8b-instant")
+    max_subcalls = int(cfg.get("recursion", {}).get("max_subcalls_per_step", 4))
 
     steps = StepLimiter(max_steps=max_steps)
     budget = BudgetManager(limit=token_budget)
@@ -79,6 +87,10 @@ def build_system(
         tools,
         step_limiter=steps,
         strict_sandbox=bool(exec_cfg.get("sandbox_strict", True)),
+        timeout_seconds=float(ctrl_cfg.get("wall_clock_seconds", 300)),
+        protected_names={"context", "query"},
+        budget=budget,
+        token_tracker=monitor.tokens,
     )
 
     def wrap_tool(fn):
@@ -103,13 +115,24 @@ def build_system(
 
         # Gap 2: wire llm_query tool → RecursionManager → sub-LLM
         # Generated REPL code calls llm_query("...") which hits sub_llm
-        rec_manager = RecursionManager(guard=recursion, llm=sub_llm, budget=budget)
+        rec_manager = RecursionManager(
+            guard=recursion,
+            llm=sub_llm,
+            budget=budget,
+            token_tracker=monitor.tokens,
+            max_subcalls_per_step=max_subcalls,
+        )
         tools.register("llm_query", rec_manager.run_subtask)
 
         # Root LLM: stronger model for the root controller
         root_llm = make_groq_llm(model=root_model)
         root_chat = make_groq_chat(model=root_model)
-        codegen = CodeGenerator(llm=root_llm, chat=root_chat, budget=budget)
+        codegen = CodeGenerator(
+            llm=root_llm,
+            chat=root_chat,
+            budget=budget,
+            token_tracker=monitor.tokens,
+        )
 
     controller = RootController(
         runtime,
@@ -125,7 +148,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description="RLM — Recursive Language Model Engine")
     p.add_argument(
         "--config",
-        default=str(Path(__file__).resolve().parents[1] / "configs" / "default.yaml"),
+        default=default_config_path(),
         help="Path to YAML config",
     )
     p.add_argument(
@@ -145,12 +168,12 @@ def main() -> None:
     )
     p.add_argument(
         "--root-model",
-        default="llama-3.3-70b-versatile",
+        default=None,
         help="Groq model for the root LLM",
     )
     p.add_argument(
         "--sub-model",
-        default="llama-3.1-8b-instant",
+        default=None,
         help="Groq model for recursive sub-LLM calls (llm_query)",
     )
     args = p.parse_args()

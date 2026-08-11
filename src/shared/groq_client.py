@@ -78,7 +78,7 @@ def make_groq_chat(
     return chat
 
 
-def optional_groq_llm() -> Callable[[str], str] | None:
+def optional_groq_llm() -> Callable[..., tuple[str, int]] | None:
     """If GROQ_API_KEY is set, return Groq caller; else None."""
     if not os.environ.get("GROQ_API_KEY", "").strip():
         return None

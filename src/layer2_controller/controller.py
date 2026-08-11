@@ -39,7 +39,7 @@ class RootController:
         self.runtime = runtime
         self.planner = planner or Planner()
         self.codegen = codegen or CodeGenerator()
-        self.flow = flow or ControlFlow()
+        self.flow = flow or ControlFlow(max_iterations=max_rounds)
         self.output = output or OutputManager()
         self.max_rounds = max_rounds
         self.stdout_truncation = stdout_truncation
@@ -49,7 +49,7 @@ class RootController:
     def run_round(self, ctx: "MountedContext", instruction: str) -> dict[str, Any]:
         """Single round: plan → codegen → exec → record. Used by tests."""
         plan = self.planner.next_step(self.flow.iteration, has_more=True)
-        if plan.action == PlanAction.STOP:
+        if plan.action == PlanAction.STOP or not self.flow.should_continue():
             return {"ok": False, "reason": "stop"}
         code = self.codegen.generate(instruction, ctx.text[:2000])
         result = self.runtime.execute(code)
@@ -70,18 +70,27 @@ class RootController:
         4. Executes ```repl blocks and feeds stdout back to the LLM
         5. Returns a locked FinalAnswer
         """
-        # Gap 1: mount context as a variable visible inside exec()
+        # Each invocation gets an isolated reasoning state and output buffer.
+        self.runtime.state.clear()
+        self.output.reset()
+        self.flow.reset()
         self.runtime.state.set("context", ctx.text)
+        self.runtime.state.set("query", query)
 
         history: list[dict[str, str]] = []
 
         for round_idx in range(self.max_rounds):
+            if not self.flow.should_continue():
+                break
             # Gap 6: generate_step uses the paper's system prompt + chat history
-            step: StepResult = self.codegen.generate_step(
-                query=query,
-                context_total_length=len(ctx.text),
-                history=history,
-            )
+            try:
+                step: StepResult = self.codegen.generate_step(
+                    query=query,
+                    context_total_length=len(ctx.text),
+                    history=history,
+                )
+            except Exception as exc:  # noqa: BLE001 - terminate under control limits
+                return FINAL(f"Execution stopped: {type(exc).__name__}: {exc}")
 
             # Gap 5: FINAL_VAR — resolve variable name from REPL state
             if step.is_final and step.final_var is not None:

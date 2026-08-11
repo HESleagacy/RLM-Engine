@@ -11,6 +11,9 @@ class OutputManager:
     def __init__(self) -> None:
         self.intermediate = IntermediateStore()
 
+    def reset(self) -> None:
+        self.intermediate = IntermediateStore()
+
     def finalize_joined(self, sep: str = "\n") -> FinalAnswer:
         text = join_text(self.intermediate.all(), sep=sep)
         return FINAL(text)

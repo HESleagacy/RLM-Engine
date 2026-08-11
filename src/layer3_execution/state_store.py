@@ -17,5 +17,8 @@ class StateStore:
     def set(self, key: str, value: Any) -> None:
         self._data[key] = value
 
+    def clear(self) -> None:
+        self._data.clear()
+
     def as_dict(self) -> dict[str, Any]:
         return dict(self._data)

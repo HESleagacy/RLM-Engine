@@ -14,5 +14,7 @@ def by_keyword(ctx: MountedContext, *keywords: str) -> list[str]:
 
 
 def by_regex(ctx: MountedContext, pattern: str) -> list[str]:
+    if len(pattern) > 1000:
+        raise ValueError("regex pattern is too long")
     rx = re.compile(pattern)
     return [ln for ln in ctx.text.splitlines() if rx.search(ln)]

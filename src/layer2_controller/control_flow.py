@@ -22,5 +22,8 @@ class ControlFlow:
     def advance(self) -> None:
         self.iteration += 1
 
+    def reset(self) -> None:
+        self.iteration = 0
+
     def terminate(self) -> FlowState:
         return FlowState.TERMINATE

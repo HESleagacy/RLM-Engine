@@ -6,12 +6,14 @@ Gap 6 fix: CodeGenerator.generate_step() uses the paper's system prompt
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from layer7_control.budget_manager import BudgetManager
+    from layer7_control.token_tracker import TokenTracker
     from shared.types import ChatCallable, LLMCallable
 
 # ── Legacy single-turn prefix (backward-compatible with tests) ────────────────
@@ -36,9 +38,11 @@ Your context has {context_total_length} total characters and is stored in the 'c
 
 The REPL environment provides:
 1. A 'context' variable containing the full context for your query. Always inspect it before answering.
-2. A 'llm_query(prompt: str) -> str' function to query a sub-LLM inside the REPL. The sub-LLM \
-   can handle around 200K characters per call.
-3. Full use of 'print()' to observe intermediate results between rounds.
+2. A 'query' variable containing the user's question.
+3. A 'llm_query(prompt: str) -> str' function to query a sub-LLM inside the REPL. The sub-LLM \
+    can handle around 200K characters per call.
+4. Context tools including 'peek_head', 'peek_tail', 'by_keyword', 'by_regex', and 'chunker'.
+5. Full use of 'print()' to observe intermediate results between rounds.
 
 You will only see truncated REPL output, so use llm_query() for semantic analysis. Use variables \
 as buffers to build up your final answer.
@@ -64,8 +68,7 @@ print(final)
 Example — probe then filter:
 ```repl
 print(context[:2000])          # inspect head
-import re
-hits = [ln for ln in context.splitlines() if re.search(r"keyword", ln, re.I)]
+hits = by_regex(r"keyword")
 print(f"found {{len(hits)}} matching lines")
 answer = llm_query(f"From these lines, answer: {{query}}\\n" + "\\n".join(hits[:200]))
 print(answer)
@@ -112,7 +115,18 @@ def _coerce_to_executable(source: str) -> str:
         compile(body, "<generated>", "exec")
     except SyntaxError:
         return f"result = {body!r}\n"
-    if "result" not in body:
+    tree = ast.parse(body, mode="exec")
+    assigns_result = any(
+        isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
+        and any(
+            isinstance(target, ast.Name) and target.id == "result"
+            for target in (
+                node.targets if isinstance(node, ast.Assign) else [node.target]
+            )
+        )
+        for node in ast.walk(tree)
+    )
+    if not assigns_result:
         return f"{body}\nresult = None\n"
     return body if body.endswith("\n") else body + "\n"
 
@@ -131,17 +145,46 @@ class StepResult:
     final_var: str | None = None   # from FINAL_VAR(...)
 
 
+def _balanced_call_value(raw: str, marker: str) -> str | None:
+    match = re.search(rf"(?m)^\s*{re.escape(marker)}\(", raw)
+    if not match:
+        return None
+    start = match.end()
+    depth = 1
+    quote: str | None = None
+    escaped = False
+    for index in range(start, len(raw)):
+        char = raw[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return raw[start:index].strip()
+    return None
+
+
 def _parse_step(raw: str) -> StepResult:
     """Parse raw LLM response text into a StepResult."""
     # FINAL_VAR takes priority (more specific pattern)
-    m_var = re.search(r"FINAL_VAR\(([^)]+)\)", raw)
+    m_var = re.search(r"(?m)^\s*FINAL_VAR\(([A-Za-z_]\w*)\)\s*$", raw)
     if m_var:
-        return StepResult(raw=raw, is_final=True, final_var=m_var.group(1).strip())
+        return StepResult(raw=raw, is_final=True, final_var=m_var.group(1))
 
     # FINAL(answer) — may span multiple lines
-    m_fin = re.search(r"FINAL\((.+?)\)", raw, re.DOTALL)
-    if m_fin:
-        return StepResult(raw=raw, is_final=True, final_text=m_fin.group(1).strip())
+    final_value = _balanced_call_value(raw, "FINAL")
+    if final_value is not None:
+        return StepResult(raw=raw, is_final=True, final_text=final_value)
 
     # Fallback for LLMs that forget parentheses: "FINAL prompt answer here" or "FINAL: answer"
     m_fin_loose = re.search(r"(?:^|\n)FINAL[:\s]+(.+)", raw)
@@ -162,10 +205,26 @@ class CodeGenerator:
         llm: "LLMCallable | None" = None,
         chat: "ChatCallable | None" = None,
         budget: "BudgetManager | None" = None,
+        token_tracker: "TokenTracker | None" = None,
     ) -> None:
         self._llm = llm
         self._chat = chat  # preferred for multi-turn REPL loop
         self.budget = budget
+        self.token_tracker = token_tracker
+
+    def _max_tokens(self, default: int) -> int:
+        if self.budget is None:
+            return default
+        remaining = self.budget.remaining()
+        if remaining <= 0:
+            raise RuntimeError("budget exceeded")
+        return min(default, remaining)
+
+    def _record_tokens(self, tokens: int) -> None:
+        if self.budget:
+            self.budget.spend(tokens)
+        if self.token_tracker:
+            self.token_tracker.record(tokens)
 
     # ── Legacy single-turn method (backward-compatible, used by tests) ─────────
 
@@ -176,9 +235,8 @@ class CodeGenerator:
                 f"{_LLM_SYSTEM_PREFIX}{instruction}\n\n"
                 f"--- Context (mounted prompt P) ---\n{context_excerpt}\n"
             )
-            raw, tokens = self._llm(prompt)
-            if self.budget:
-                self.budget.spend(tokens)
+            raw, tokens = self._llm(prompt, max_tokens=self._max_tokens(1024))
+            self._record_tokens(tokens)
             return _coerce_to_executable(raw.strip())
         # Deterministic fallback for tests (no LLM needed)
         return f"result = {context_excerpt!r}\n"
@@ -212,18 +270,18 @@ class CodeGenerator:
                 messages.append(
                     {"role": "user", "content": f"REPL output:\n{h['output']}"}
                 )
-            raw, tokens = self._chat(messages)
-            if self.budget:
-                self.budget.spend(tokens)
+            raw, tokens = self._chat(
+                messages, max_tokens=self._max_tokens(4096)
+            )
+            self._record_tokens(tokens)
 
         elif self._llm is not None:
             # Flatten history into a single prompt (degraded path)
             flat = f"{system}\n\nQuery: {query}"
             for h in history:
                 flat += f"\n\n```repl\n{h['code']}\n```\nREPL output:\n{h['output']}"
-            raw, tokens = self._llm(flat)
-            if self.budget:
-                self.budget.spend(tokens)
+            raw, tokens = self._llm(flat, max_tokens=self._max_tokens(4096))
+            self._record_tokens(tokens)
 
         else:
             # Deterministic test fallback — immediately signal done

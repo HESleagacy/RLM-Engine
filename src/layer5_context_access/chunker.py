@@ -11,6 +11,8 @@ def fixed_windows(ctx: MountedContext, size: int, overlap: int = 0) -> list[str]
     t = ctx.text
     if overlap >= size:
         raise ValueError("overlap must be smaller than size")
+    if overlap < 0:
+        raise ValueError("overlap must be non-negative")
     step = size - overlap
     chunks: list[str] = []
     i = 0
