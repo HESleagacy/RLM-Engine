@@ -30,8 +30,18 @@ demo = [
   "rank_bm25>=0.2.2",
 ]
 
+[project.scripts]
+rlm = "main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["main"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+configs = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,7 +1,7 @@
 # 🧠 RLM Engine — Recursive Language Model
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-10%2F10%20passing-brightgreen.svg)](#-testing)
+[![Tests](https://img.shields.io/badge/tests-19%20passing-brightgreen.svg)](#-testing)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 > **A controlled reasoning engine that thinks under control, under cost, and under verification.**
@@ -36,7 +36,7 @@ cp .env.example .env
 ### 3. Run
 
 ```bash
-# Full RLM reasoning loop
+# Full RLM reasoning loop from a source checkout
 PYTHONPATH=src python3 -m src.main \
   --use-groq \
   --prompt "The sky is blue. The grass is green. The sun is yellow. The ocean is deep blue." \
@@ -44,6 +44,9 @@ PYTHONPATH=src python3 -m src.main \
 
 # Single-round mode (no LLM required)
 PYTHONPATH=src python3 -m src.main --prompt "Hello world"
+
+# Installed CLI
+rlm --prompt "Hello world"
 ```
 
 ---
@@ -52,7 +55,7 @@ PYTHONPATH=src python3 -m src.main --prompt "Hello world"
 
 A **Flask + vanilla JS** UI that demonstrates why RLM beats RAG on fact-consistency tasks.
 
-**The problem:** Given a document with 15 facts scattered across filler paragraphs, write a story using ALL facts correctly. RAG retrieves only the top-5 chunks and often misses facts or hallucinates names. RLM programmatically searches the entire document, verifies each fact, then generates.
+**The problem:** Given a document with 15 facts scattered across filler paragraphs, write a story using ALL facts correctly. RAG retrieves only the top-10 chunks and often misses facts or hallucinates names. RLM runs the actual `RootController` REPL over the complete document.
 
 ```bash
 # Install demo dependencies
@@ -73,8 +76,8 @@ Then open **http://localhost:7860** and:
 
 | Pipeline | What it does | Typical accuracy |
 |----------|-------------|-----------------|
-| **RAG** | BM25 top-5 chunks → single LLM call | ~40-60% of facts |
-| **RLM** | Full document mounted → multi-round REPL → `llm_query()` per chunk | ~80-100% of facts |
+| **RAG** | BM25 top-10 chunks → single LLM call | Informational only |
+| **RLM** | Full document mounted → controller REPL → `llm_query()` as needed | Informational only |
 
 > **Stack:** Flask backend (`demo/app.py`) + vanilla JS/CSS frontend (`demo/static/index.html`) — no build step required.
 
@@ -92,7 +95,7 @@ The system is organized into **8 distinct layers**, each with a single responsib
 ├──────────────────┼──────────────────────────────────────┤
 │  L2 Controller   │ REPL loop: plan → codegen → exec    │  ← Hot Path
 ├──────────────────┼──────────────────────────────────────┤
-│  L3 Execution    │ Python exec() sandbox + stdout       │
+│  L3 Execution    │ Validated exec worker + stdout       │
 ├──────────────────┼──────────────────────────────────────┤
 │  L4 Recursion    │ llm_query() sub-LLM orchestration   │
 ├──────────────────┼──────────────────────────────────────┤
@@ -108,9 +111,9 @@ The system is organized into **8 distinct layers**, each with a single responsib
 
 ### How It Works
 
-1. **Mount** — Your prompt/document is mounted as an immutable `context` variable in a Python sandbox
+1. **Mount** — Your prompt/document is mounted as a protected `context` variable in a Python sandbox
 2. **Generate** — The root LLM (Llama 3.3-70B) generates Python code to explore the context
-3. **Execute** — Code runs in a sandboxed `exec()` with stdout capture
+3. **Execute** — Validated code runs in a killable worker with stdout capture
 4. **Recurse** — Generated code can call `llm_query()` to delegate to a sub-LLM (Llama 3.1-8B)
 5. **Iterate** — REPL output feeds back to the LLM for the next round
 6. **Finalize** — The LLM emits `FINAL(answer)` to lock the output
@@ -142,7 +145,7 @@ All settings live in [`configs/default.yaml`](configs/default.yaml):
 | `stdout_truncation` | 3,000 | Chars of `print()` output fed back per round |
 | `root_model` | `llama-3.3-70b-versatile` | Root controller LLM |
 | `sub_model` | `llama-3.1-8b-instant` | Sub-call LLM for `llm_query()` |
-| `sandbox_strict` | `true` | Restrict dangerous builtins |
+| `sandbox_strict` | `true` | Restrict imports, introspection, and dangerous builtins |
 
 ---
 
@@ -159,7 +162,7 @@ pytest -q tests/test_execution.py
 pytest -v
 ```
 
-**Current status: 10/10 tests passing ✅**
+**Current status: 19 tests passing across 10 test suites.**
 
 | Test Suite | Coverage |
 |------------|----------|
@@ -220,7 +223,7 @@ RLM-Engine/
 │   ├── layer7_control/           # Budget, steps, recursion guards
 │   ├── layer8_evaluation/        # Benchmarks, baselines, metrics
 │   └── shared/                   # Types, constants, Groq client, utils
-├── tests/                        # Per-layer test suites (10/10 passing)
+├── tests/                        # Per-layer test suites (19 tests passing)
 ├── pyproject.toml                # Build config + dependencies
 └── CONTEXT.md                    # Detailed architecture analysis
 ```
@@ -236,11 +239,11 @@ RLM-Engine/
 - [x] **Sandboxing** — Restricted builtins (`open`, `eval`, `exec`, `__import__` removed)
 - [x] **Benchmark Suite** — S-NIAH, BrowseComp, OOLONG, OOLONG-Pairs, CodeQA with streaming loaders
 - [x] **Baseline Agents** — CodeAct+BM25 and Summary Agent for comparison
-- [x] **Full Test Coverage** — 10/10 tests across all 8 layers
+- [x] **Regression Coverage** — 19 tests across all 8 layers
 
 ## 🔮 Roadmap
 
-- [ ] **Dynamic Cost Tracking** — Wire `TokenTracker` to actual LLM token metadata
+- [x] **Dynamic Cost Tracking** — Wire `TokenTracker` to actual LLM token metadata
 - [ ] **Async Orchestration** — Non-blocking `llm_query()` for parallel chunk processing
 - [ ] **Learned Planning** — Replace stub `Planner` with trained policy
 - [ ] **Execution Trees** — Replace flat recursion with structured tree/graph execution

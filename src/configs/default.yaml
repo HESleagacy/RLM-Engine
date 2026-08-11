@@ -1,0 +1,18 @@
+project:
+  name: rlm-engine
+control:
+  max_steps: 100
+  max_recursion_depth: 5
+  token_budget: 100000
+  wall_clock_seconds: 300
+execution:
+  sandbox_strict: true
+recursion:
+  max_subcalls_per_step: 4
+rlm:
+  max_rounds: 20
+  stdout_truncation: 3000
+  root_model: llama-3.3-70b-versatile
+  sub_model: llama-3.1-8b-instant
+evaluation:
+  benchmarks: []

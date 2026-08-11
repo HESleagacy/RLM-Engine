@@ -65,7 +65,7 @@ Executes generated code and maintains state across rounds.
   - Restricted builtins injection
 * `state_store.StateStore` — mutable key-value store surviving across exec rounds
 * `tool_interface.ToolInterface` — registry of callable tools injected into exec namespace
-* `sandbox.safe_builtins()` — removes `open`, `input`, `compile`, `eval`, `exec`, `__import__`
+* `sandbox.safe_builtins()` — allowlists harmless builtins and rejects imports/dunder introspection
 
 ### Principle
 
@@ -238,7 +238,7 @@ User provides --prompt (context) + --query
 
 # TEST STATUS
 
-**10/10 tests pass**:
+**19 tests pass across 10 test modules**:
 
 | Test | Status |
 |------|--------|
@@ -251,6 +251,7 @@ User provides --prompt (context) + --query
 | `test_input_layer.py` | ✅ |
 | `test_output.py` | ✅ |
 | `test_recursion.py` | ✅ |
+| `test_regressions.py` | ✅ |
 
 ---
 
@@ -295,12 +296,12 @@ Structure (trees) beats blind recursion
 ### Resolved
 
 * ✅ **`_extract_repl_block()` regex** — was using double-escaped `\\n` / `\\s\\S` preventing match of actual newlines in LLM output. Fixed to use proper regex metacharacters.
-* ✅ **Evaluation module** — added missing `evaluate_one()` to `evaluator.py`, and `sample_task()` / `trivial_example()` to `benchmarks/__init__.py`. All 10/10 tests now pass.
+* ✅ **Evaluation module** — added missing `evaluate_one()` to `evaluator.py`, and `sample_task()` / `trivial_example()` to `benchmarks/__init__.py`.
 
 ### Open
 
-* ⚠️ **`TokenTracker` unused** — instantiated in `ExecutionMonitor` but `.record()` never called; token tracking done solely through `BudgetManager.spend()`
-* ⚠️ **Sandbox escape** — `safe_builtins()` removes `__import__` but Python's `import` statement may still work in some contexts
+* ✅ **`TokenTracker` wiring** — root and recursive LLM token usage is recorded and exposed by `ExecutionMonitor`
+* ✅ **Sandbox escape mitigation** — strict execution now validates imports/dunder access and uses a killable worker when a timeout is configured; this is still not a container-level security boundary
 * ⚠️ **Planner is a stub** — minimal policy (READ_CHUNK → GENERATE_CODE → STOP), no learned planning
 
 ### Future Evolution Path
