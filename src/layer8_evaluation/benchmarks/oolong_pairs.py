@@ -14,7 +14,7 @@ except ImportError:
 @dataclass(frozen=True, slots=True)
 class OolongPairsTask:
     question: str
-    gold: str
+    gold: str | None
     context: str
 
 
@@ -66,7 +66,7 @@ def load_oolong_pairs_tasks(num_tasks: int = 20) -> list[OolongPairsTask]:
         tasks.append(
             OolongPairsTask(
                 question=full_q,
-                gold="[]", # In a real evaluator, we would programmatically compute the gold array
+                gold=None,  # Gold pairs require the benchmark's structured annotations.
                 context=ctx
             )
         )

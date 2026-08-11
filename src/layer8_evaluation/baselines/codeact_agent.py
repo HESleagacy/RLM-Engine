@@ -16,13 +16,23 @@ except ImportError:
 
 
 class CodeActBM25Agent:
-    def __init__(self, llm: Callable[[str], str], max_steps: int = 10):
+    def __init__(
+        self,
+        llm: Callable[[str], str],
+        max_steps: int = 10,
+        timeout_seconds: float = 30.0,
+    ):
         self.llm = llm
         self.max_steps = max_steps
         
         self.state = StateStore()
         self.tools = ToolInterface()
-        self.runtime = RuntimeEngine(self.state, self.tools, strict_sandbox=True)
+        self.runtime = RuntimeEngine(
+            self.state,
+            self.tools,
+            strict_sandbox=True,
+            timeout_seconds=timeout_seconds,
+        )
         
     def _build_bm25(self, context: str) -> list[str]:
         # Simple line-by-line or paragraph split for BM25

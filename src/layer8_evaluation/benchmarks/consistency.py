@@ -7,6 +7,7 @@ The task: write a story using ALL facts correctly (no hallucination).
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass, field
 
 
@@ -20,8 +21,12 @@ class FactSet:
         return [f"{k} = {v}" for k, v in self.facts.items()]
 
     def verify(self, story: str) -> dict[str, bool]:
-        """Check which fact values appear in the story text."""
-        return {k: v.lower() in story.lower() for k, v in self.facts.items()}
+        """Check that each key and its value occur together in one sentence."""
+        sentences = re.split(r"(?<=[.!?])\s+", story.lower())
+        return {
+            key: any(key.lower() in sentence and value.lower() in sentence for sentence in sentences)
+            for key, value in self.facts.items()
+        }
 
     def accuracy(self, story: str) -> float:
         checks = self.verify(story)

@@ -21,17 +21,23 @@ _BASE_TEXT = (
     "all over the continent traveled here to witness the grand architecture. "
 )
 
-def generate_sniah_tasks(num_tasks: int = 50) -> list[SNIAHExample]:
+def generate_sniah_tasks(
+    num_tasks: int = 50, *, seed: int | None = None
+) -> list[SNIAHExample]:
     """
     Generate single needle-in-a-haystack tasks scaling from 2^13 to 2^18 characters/tokens.
     """
+    if num_tasks <= 0:
+        return []
+    rng = random.Random(seed)
     tasks = []
     # 2^13 is ~8k, 2^18 is ~262k
-    lengths = [int(2 ** (13 + (i * 5 / num_tasks))) for i in range(num_tasks)]
+    denominator = max(num_tasks - 1, 1)
+    lengths = [int(2 ** (13 + (i * 5 / denominator))) for i in range(num_tasks)]
     
     for i, target_len in enumerate(lengths):
         # Generate the needle
-        magic_number = random.randint(1000000, 9999999)
+        magic_number = rng.randint(1000000, 9999999)
         needle = f"The special magic code for sector {i} is {magic_number}."
         
         # Build the haystack
@@ -39,7 +45,7 @@ def generate_sniah_tasks(num_tasks: int = 50) -> list[SNIAHExample]:
         haystack_text = _BASE_TEXT * repeats
         
         # Insert the needle at a random depth
-        insert_idx = random.randint(0, len(haystack_text))
+        insert_idx = rng.randint(0, len(haystack_text))
         final_haystack = haystack_text[:insert_idx] + " " + needle + " " + haystack_text[insert_idx:]
         
         tasks.append(

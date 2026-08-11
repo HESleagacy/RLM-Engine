@@ -15,7 +15,7 @@ class EvalResult:
     task_id: int
     correct: bool
     predicted: str
-    gold: str
+    gold: str | None
     cost_tokens: int
     cost_steps: int
 
@@ -25,7 +25,7 @@ def run_benchmark(
     tasks: list[Any],  # e.g. list[SNIAHExample], etc.
     run_fn: Callable[[str, str], tuple[str, int, int]], # context, query -> (answer, tokens, steps)
     output_path: str,
-) -> None:
+) -> list[EvalResult]:
     """
     Run the provided model/agent function `run_fn` over the list of `tasks`.
     Logs the output to JSONL.
@@ -49,13 +49,13 @@ def run_benchmark(
                 pred, tokens, steps = f"ERROR: {e}", 0, 0
                 
             # Compare
-            ok = exact_match(pred, gold) if gold else False
+            ok = exact_match(pred, str(gold)) if gold is not None else False
             
             res = EvalResult(
                 task_id=i,
                 correct=ok,
                 predicted=pred,
-                gold=str(gold),
+                gold=gold if gold is None else str(gold),
                 cost_tokens=tokens,
                 cost_steps=steps,
             )
@@ -75,6 +75,7 @@ def run_benchmark(
     print(f"Avg Tokens: {avg_tokens:,.0f}")
     print(f"Avg Steps:  {avg_steps:.1f}")
     print("--------------------------\n")
+    return results
 
 
 def evaluate_one(
