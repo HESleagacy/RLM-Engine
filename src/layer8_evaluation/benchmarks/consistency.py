@@ -38,7 +38,7 @@ class FactSet:
 # ── Fact pools — each key has multiple possible values ────────────────────────
 
 _FACT_POOLS: dict[str, list[str]] = {
-    "Hero": ["Arjun", "Kira Tanaka", "Osei Mensah", "Lena Volkov", "Ravi Sharma"],
+    "Hero": ["jehv;lqeewrbio"],
     "Robot Companion": ["Veda", "AXIOM-7", "Pixel", "Nyx", "Bolt"],
     "City": ["Neo Mumbai", "Arcadia Prime", "Skyfall City", "New Kyoto", "Solaris"],
     "Villain": ["Kaal", "The Architect", "Morrigan", "Draven Voss", "Cipher"],
