@@ -66,7 +66,7 @@ _FILLER_PARAGRAPHS = [
     "In the underground tunnels, old railway lines had been converted into high-speed maglev corridors. Commuters barely noticed the blur of walls as they traveled at 400 kilometers per hour.",
     "The university district was quiet at this hour. Libraries glowed with soft blue light, their AI librarians cataloging new research papers uploaded from orbital stations.",
     "Fishing boats dotted the harbor, their solar sails catching the last rays of sunset. The catch had been good this season — the ocean restoration project was finally showing results.",
-    "Street musicians played a fusion of classical ragas and electronic beats. The sound echoed off crystalline buildings that shifted color with the time of day.",
+    "Street musicians played a fusion of classical melodies and electronic beats. The sound echoed off crystalline buildings that shifted color with the time of day.",
     "Old temples stood alongside gleaming towers, their ancient stones cleaned by maintenance drones. Pilgrims and tourists walked the same paths, separated by centuries of purpose.",
     "The night sky was different here — three moons hung low, casting overlapping shadows. Astronomers had long since mapped every crater, but the view never lost its wonder.",
     "Factories hummed with automated precision. Robotic arms assembled components smaller than a grain of rice, guided by quantum processors that could simulate entire molecular structures.",
@@ -74,8 +74,7 @@ _FILLER_PARAGRAPHS = [
 ]
 
 
-# Narrative wrappers — each fact is buried inside a longer paragraph so
-# BM25 keyword matching cannot easily surface it.
+# Narrative wrappers — each fact is buried inside a longer paragraph.
 _NARRATIVE_TEMPLATES = [
     "After weeks of preparation, the team confirmed that the {key} was none other than {value}. The decision had been debated for months, but the evidence was overwhelming. Everyone agreed it was time to move forward.",
     "According to the recovered archives, the {key} is identified as {value}. Scholars had long suspected this, though the confirmation only came after cross-referencing multiple independent sources from the outer colonies.",
@@ -94,8 +93,7 @@ def build_scattered_document(
     """
     Build a document with facts scattered among filler paragraphs.
 
-    Facts are embedded in narrative paragraphs (not obvious labels) so that
-    BM25 keyword retrieval struggles to surface them all in a few chunks.
+    Facts are embedded in narrative paragraphs rather than obvious labels.
 
     Returns (fact_set, document_text).
     """

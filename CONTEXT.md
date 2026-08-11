@@ -151,7 +151,7 @@ Bound system behavior and cost.
 * `step_limiter.StepLimiter` — hard cap on execution steps (default: 100)
 * `budget_manager.BudgetManager` — thread-safe token budget with `spend()`/`remaining()` (default: 100K)
 * `recursion_guard.RecursionGuard` — depth limiter with enter/leave (default: 5)
-* `token_tracker.TokenTracker` — event-level token recording (currently unused — pending wiring)
+* `token_tracker.TokenTracker` — event-level token recording
 * `execution_monitor.ExecutionMonitor` — aggregate health snapshot of all control components
 
 ### Principle
@@ -172,7 +172,6 @@ Reasoning must be constrained.
 
 ### Baselines
 
-* `CodeActBM25Agent` — BM25 retrieval + Python execution agent
 * `SummaryAgent` — iterative chunk summarization agent
 
 ### Metrics

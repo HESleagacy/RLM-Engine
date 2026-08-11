@@ -1,4 +1,4 @@
-# 🧠 RLM Engine — Recursive Language Model
+# RLM Engine — Recursive Language Model
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Tests](https://img.shields.io/badge/tests-19%20passing-brightgreen.svg)](#-testing)
@@ -10,7 +10,7 @@ Implementation of the **Recursive Language Model** architecture from *Khattab et
 
 ---
 
-## ⚡ Quick Start
+## Quick Start
 
 ### 1. Install
 
@@ -51,11 +51,11 @@ rlm --prompt "Hello world"
 
 ---
 
-## 🎮 Demo: Consistency Challenge (RAG vs RLM)
+## Demo: Consistency Challenge
 
-A **Flask + vanilla JS** UI that demonstrates why RLM beats RAG on fact-consistency tasks.
+A **Flask + vanilla JS** UI for running the RLM pipeline on fact-consistency tasks.
 
-**The problem:** Given a document with 15 facts scattered across filler paragraphs, write a story using ALL facts correctly. RAG retrieves only the top-10 chunks and often misses facts or hallucinates names. RLM runs the actual `RootController` REPL over the complete document.
+**The problem:** Given a document with 15 facts scattered across filler paragraphs, write a story using all facts correctly. The RLM controller mounts the complete document and reasons over it through the REPL.
 
 ```bash
 # Install demo dependencies
@@ -70,20 +70,15 @@ PYTHONPATH=src python demo/app.py
 
 Then open **http://localhost:7860** and:
 
-1. Click **🎲 Generate Document** — creates a fact-scattered document with 15 named elements
-2. Click **🚀 Run Comparison** — runs both RAG and RLM pipelines side-by-side
-3. Compare stories with **fact-accuracy scores** — green/red chips show which facts each pipeline found
-
-| Pipeline | What it does | Typical accuracy |
-|----------|-------------|-----------------|
-| **RAG** | BM25 top-10 chunks → single LLM call | Informational only |
-| **RLM** | Full document mounted → controller REPL → `llm_query()` as needed | Informational only |
+1. Click **Generate Document** to create a fact-scattered document
+2. Click **Run RLM** to process the document through the controller REPL
+3. Inspect the generated story and fact-accuracy score
 
 > **Stack:** Flask backend (`demo/app.py`) + vanilla JS/CSS frontend (`demo/static/index.html`) — no build step required.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 The system is organized into **8 distinct layers**, each with a single responsibility:
 
@@ -132,7 +127,7 @@ The system is organized into **8 distinct layers**, each with a single responsib
 
 ---
 
-## 🔧 Configuration
+## Configuration
 
 All settings live in [`configs/default.yaml`](configs/default.yaml):
 
@@ -149,7 +144,7 @@ All settings live in [`configs/default.yaml`](configs/default.yaml):
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ```bash
 # Run all tests
@@ -175,10 +170,11 @@ pytest -v
 | `test_output.py` | Layer 6: intermediate → FINAL aggregation |
 | `test_control.py` | Layer 7: step limits, budget, recursion guard |
 | `test_evaluation.py` | Layer 8: metrics + benchmark smoke test |
+| `test_regressions.py` | Cross-layer security and control regressions |
 
 ---
 
-## 📊 Evaluation & Benchmarks
+## Evaluation & Benchmarks
 
 Layer 8 includes benchmark loaders and baseline agents for systematic evaluation:
 
@@ -192,11 +188,10 @@ Layer 8 includes benchmark loaders and baseline agents for systematic evaluation
 | **OOLONG-Pairs** | Quadratic | Pair-aggregation over OOLONG contexts |
 | **CodeQA** | Variable | THUDM/LongBench-v2 code repository understanding |
 
-### Baseline Agents
+### Baseline Agent
 
 | Agent | Strategy |
 |-------|----------|
-| **CodeAct + BM25** | BM25 retrieval + Python code execution |
 | **Summary Agent** | Iterative chunk summarization |
 
 ### Metrics
@@ -207,7 +202,7 @@ Layer 8 includes benchmark loaders and baseline agents for systematic evaluation
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 RLM-Engine/
@@ -230,29 +225,7 @@ RLM-Engine/
 
 ---
 
-## ✅ Completed Milestones
-
-- [x] **Core REPL Loop** — `run_until_done()` drives multi-round reasoning with `FINAL()` termination
-- [x] **Stateful Execution** — Context mounted as variable; `print()` output captured and fed back
-- [x] **Recursive Tooling** — `llm_query()` wired into sandbox via `RecursionManager` with depth guards
-- [x] **Groq Integration** — Dual-model setup: Llama 3.3-70B (root) + Llama 3.1-8B (sub-calls)
-- [x] **Sandboxing** — Restricted builtins (`open`, `eval`, `exec`, `__import__` removed)
-- [x] **Benchmark Suite** — S-NIAH, BrowseComp, OOLONG, OOLONG-Pairs, CodeQA with streaming loaders
-- [x] **Baseline Agents** — CodeAct+BM25 and Summary Agent for comparison
-- [x] **Regression Coverage** — 19 tests across all 8 layers
-
-## 🔮 Roadmap
-
-- [x] **Dynamic Cost Tracking** — Wire `TokenTracker` to actual LLM token metadata
-- [ ] **Async Orchestration** — Non-blocking `llm_query()` for parallel chunk processing
-- [ ] **Learned Planning** — Replace stub `Planner` with trained policy
-- [ ] **Execution Trees** — Replace flat recursion with structured tree/graph execution
-- [ ] **Verification Layer** — Add output validation before `FINAL()` locking
-- [ ] **Hybrid Symbolic + LLM** — Integrate symbolic reasoning for deterministic sub-problems
-
----
-
-## 🔗 References
+## References
 
 - Khattab et al., *Recursive Language Models*, 2025
 - System prompt adapted from Appendix D.1 of the paper

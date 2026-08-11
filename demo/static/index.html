@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>RLM vs RAG — Consistency Challenge</title>
+  <title>RLM Consistency Challenge</title>
   <style>
     :root {
       --bg: #f8faf8;
@@ -282,11 +282,6 @@
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
-    .badge-rag {
-      background: rgba(217, 119, 6, 0.1);
-      color: #b45309;
-      border: 1px solid rgba(217, 119, 6, 0.3);
-    }
     .badge-rlm {
       background: rgba(22, 163, 74, 0.1);
       color: #15803d;
@@ -300,8 +295,8 @@
 <div class="container">
   <!-- Header -->
   <div class="header">
-    <h1>🧠 RLM vs RAG — Consistency Challenge</h1>
-    <p>Generate a fact-scattered document, then compare how <strong>RAG</strong> (retrieval-only) and <strong>RLM</strong> (recursive reasoning) handle story generation with all facts.</p>
+    <h1>RLM Consistency Challenge</h1>
+    <p>Generate a fact-scattered document, then use recursive reasoning to produce a story containing every fact.</p>
   </div>
 
   <!-- Controls -->
@@ -313,8 +308,8 @@
     <button class="btn btn-secondary" id="btnGenerate" onclick="generateDoc()">
       🎲 Generate Document
     </button>
-    <button class="btn btn-primary" id="btnRun" onclick="runComparison()">
-      🚀 Run Comparison
+    <button class="btn btn-primary" id="btnRun" onclick="runRlm()">
+      Run RLM
     </button>
   </div>
 
@@ -351,21 +346,9 @@
 
   <!-- Results -->
   <div class="panels" id="resultsSection" style="display:none;">
-    <!-- RAG -->
     <div class="panel">
       <div class="panel-header">
-        <h2>📦 RAG Story</h2>
-        <span class="badge badge-rag">BM25 + LLM</span>
-      </div>
-      <div class="panel-body">
-        <textarea id="ragStory" class="tall" readonly placeholder="RAG output will appear here..."></textarea>
-        <div class="score-card" id="ragScore"></div>
-      </div>
-    </div>
-    <!-- RLM -->
-    <div class="panel">
-      <div class="panel-header">
-        <h2>🧠 RLM Story</h2>
+        <h2>RLM Story</h2>
         <span class="badge badge-rlm">REPL + Sub-LLM</span>
       </div>
       <div class="panel-body">
@@ -424,7 +407,7 @@
       document.getElementById('factsRaw').value = raw;
       document.getElementById('factCount').textContent = `${Object.keys(data.facts).length} facts`;
 
-      setStatus('Document generated! Click "Run Comparison" to test both pipelines.', 'success');
+      setStatus('Document generated! Click "Run RLM" to process it.', 'success');
     } catch (e) {
       setStatus('Error: ' + e.message, 'error');
     } finally {
@@ -494,7 +477,7 @@
     el.innerHTML = html;
   }
 
-  async function runComparison() {
+  async function runRlm() {
     const document_text = document.getElementById('document').value;
     const facts = parseFacts();
 
@@ -507,20 +490,18 @@
       return;
     }
 
-    setStatus('Running RAG and RLM pipelines... This may take 30-60 seconds.');
+    setStatus('Running the RLM pipeline... This may take 30-60 seconds.');
     setProgress(true);
     setButtons(true);
     document.getElementById('resultsSection').style.display = 'grid';
-    document.getElementById('ragStory').value = 'Running...';
     document.getElementById('rlmStory').value = 'Running...';
-    renderScore('ragScore', null);
     renderScore('rlmScore', null);
 
     try {
       const res = await fetch('/api/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ document: document_text, facts, pipeline: 'both' }),
+        body: JSON.stringify({ document: document_text, facts }),
       });
       const data = await res.json();
 
@@ -529,19 +510,10 @@
         return;
       }
 
-      // RAG
-      if (data.rag) {
-        document.getElementById('ragStory').value = data.rag.story;
-        renderScore('ragScore', data.rag.score);
-      }
+      document.getElementById('rlmStory').value = data.story || data.error || '';
+      renderScore('rlmScore', data.score);
 
-      // RLM
-      if (data.rlm) {
-        document.getElementById('rlmStory').value = data.rlm.story;
-        renderScore('rlmScore', data.rlm.score);
-      }
-
-      setStatus('Comparison complete!', 'success');
+      setStatus('RLM run complete!', 'success');
     } catch (e) {
       setStatus('Error: ' + e.message, 'error');
     } finally {
