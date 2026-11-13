@@ -17,6 +17,6 @@ class LineNode:
 def lines_as_tree(ctx: MountedContext) -> LineNode:
     """Flat list represented as a degenerate tree (future: real AST)."""
     root = LineNode(index=-1, text="", children=[])
-    for i, line in enumerate(ctx.text.splitlines()):
+    for i, line in enumerate(ctx.iter_lines()):
         root.children.append(LineNode(index=i, text=line, children=[]))
     return root

@@ -1,0 +1,47 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python ${{ matrix.python }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install ".[dev]"
+      - run: python -m pytest -q
+
+  docker:
+    name: Linux container and read-only document mount
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run offline tests as the container's non-root user
+        run: |
+          docker build --target test -t rlm-engine-test .
+          docker run --rm --init rlm-engine-test
+      - name: Exercise Compose CLI with a read-only host data directory
+        env:
+          RLM_DATA_DIR: ${{ runner.temp }}/rlm-documents
+        run: |
+          mkdir -p "$RLM_DATA_DIR"
+          printf 'Hello from mounted storage' > "$RLM_DATA_DIR/document.txt"
+          docker compose -f compose.yaml -f compose.storage.yaml build app
+          docker compose -f compose.yaml -f compose.storage.yaml run --rm --no-deps app \
+            rlm --context-file /data/document.txt --memory-threshold-bytes 0 \
+            > result.txt
+          grep -F "value='Hello from mounted storage'" result.txt

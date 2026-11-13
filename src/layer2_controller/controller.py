@@ -51,6 +51,7 @@ class RootController:
         plan = self.planner.next_step(self.flow.iteration, has_more=True)
         if plan.action == PlanAction.STOP or not self.flow.should_continue():
             return {"ok": False, "reason": "stop"}
+        self.runtime.state.set("context", ctx.text)
         code = self.codegen.generate(instruction, ctx.text[:2000])
         result = self.runtime.execute(code)
         self.flow.advance()

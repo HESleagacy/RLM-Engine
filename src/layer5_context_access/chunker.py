@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Iterator
+
 from layer1_input.context_repr import MountedContext
 
 
-def fixed_windows(ctx: MountedContext, size: int, overlap: int = 0) -> list[str]:
+def iter_windows(ctx: MountedContext, size: int, overlap: int = 0) -> Iterator[str]:
+    """Yield windows on demand, without collecting the document in RAM."""
     if size <= 0:
         raise ValueError("size must be positive")
     t = ctx.text
@@ -14,9 +17,12 @@ def fixed_windows(ctx: MountedContext, size: int, overlap: int = 0) -> list[str]
     if overlap < 0:
         raise ValueError("overlap must be non-negative")
     step = size - overlap
-    chunks: list[str] = []
     i = 0
     while i < len(t):
-        chunks.append(t[i : i + size])
+        yield t[i : i + size]
         i += step
-    return chunks
+
+
+def fixed_windows(ctx: MountedContext, size: int, overlap: int = 0) -> list[str]:
+    """Compatibility helper; use iter_windows for memory-bounded traversal."""
+    return list(iter_windows(ctx, size, overlap))

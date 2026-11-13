@@ -1,0 +1,11 @@
+# Optional read-only data directory on an internal drive or external SSD.
+# Usage: docker compose -f compose.yaml -f compose.storage.yaml run --rm app ...
+services:
+  app:
+    volumes:
+      - type: bind
+        source: ${RLM_DATA_DIR:?Set RLM_DATA_DIR to an existing document directory}
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false

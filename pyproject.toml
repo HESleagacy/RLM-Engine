@@ -44,3 +44,6 @@ configs = ["*.yaml"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "storage: hybrid RAM/file context workflow and regression tests",
+]

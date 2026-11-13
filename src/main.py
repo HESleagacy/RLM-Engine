@@ -22,6 +22,7 @@ from layer5_context_access import (
     by_keyword,
     by_regex,
     fixed_windows,
+    iter_windows,
     peek_head,
     peek_tail,
 )
@@ -104,6 +105,7 @@ def build_system(
     tools.register("by_keyword", wrap_tool(by_keyword))
     tools.register("by_regex", wrap_tool(by_regex))
     tools.register("chunker", wrap_tool(fixed_windows))
+    tools.register("iter_chunks", wrap_tool(iter_windows))
 
     codegen: CodeGenerator | None = None
 
@@ -151,11 +153,22 @@ def main() -> None:
         default=default_config_path(),
         help="Path to YAML config",
     )
-    p.add_argument(
+    source = p.add_mutually_exclusive_group()
+    source.add_argument(
         "--prompt",
         default="Hello",
         help="Raw context text to mount as P (the long document/corpus)",
     )
+    source.add_argument(
+        "--context-file", type=Path,
+        help="UTF-8 document on any local drive (large files use disk-backed reads)",
+    )
+    p.add_argument(
+        "--memory-threshold-bytes", type=int, default=1_048_576,
+        help="Largest file to keep in RAM; use 0 to force non-empty files onto disk",
+    )
+    p.add_argument("--context-block-chars", type=int, default=65_536)
+    p.add_argument("--context-cache-blocks", type=int, default=8)
     p.add_argument(
         "--query",
         default=None,
@@ -178,17 +191,32 @@ def main() -> None:
     )
     args = p.parse_args()
 
+    try:
+        if args.context_file is not None:
+            ctx = MountedContext.from_file(
+                args.context_file,
+                memory_threshold_bytes=args.memory_threshold_bytes,
+                block_chars=args.context_block_chars,
+                cache_blocks=args.context_cache_blocks,
+            )
+        else:
+            ctx = MountedContext(text=normalize(args.prompt))
+    except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+        p.error(str(exc))
+
     controller, monitor = build_system(
         args.config,
         use_groq=args.use_groq,
         root_model=args.root_model,
         sub_model=args.sub_model,
     )
-    ctx = MountedContext(text=normalize(args.prompt))
 
     if args.query and args.use_groq:
         # Full RLM REPL loop
-        print(f"[RLM] mounting context ({len(ctx.text):,} chars), query: {args.query!r}")
+        print(
+            f"[RLM] mounting context ({len(ctx.text):,} chars, "
+            f"{ctx.storage_backend}), query: {args.query!r}"
+        )
         answer = controller.run_until_done(ctx, args.query)
         print("\n── Final Answer ──")
         print(answer.text)

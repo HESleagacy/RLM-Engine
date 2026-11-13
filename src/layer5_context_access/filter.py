@@ -8,13 +8,12 @@ from layer1_input.context_repr import MountedContext
 
 
 def by_keyword(ctx: MountedContext, *keywords: str) -> list[str]:
-    lines = ctx.text.splitlines()
     kws = [k.lower() for k in keywords]
-    return [ln for ln in lines if any(k in ln.lower() for k in kws)]
+    return [ln for ln in ctx.iter_lines() if any(k in ln.lower() for k in kws)]
 
 
 def by_regex(ctx: MountedContext, pattern: str) -> list[str]:
     if len(pattern) > 1000:
         raise ValueError("regex pattern is too long")
     rx = re.compile(pattern)
-    return [ln for ln in ctx.text.splitlines() if rx.search(ln)]
+    return [ln for ln in ctx.iter_lines() if rx.search(ln)]
