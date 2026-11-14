@@ -47,6 +47,10 @@ The REPL environment provides:
 3. A 'llm_query(prompt: str) -> str' function to query a sub-LLM inside the REPL. The sub-LLM \
     can handle around 200K characters per call.
 4. Context tools including 'peek_head', 'peek_tail', 'by_keyword', 'by_regex', and 'chunker'.
+   'context_info()' returns document statistics and bounded heading/page previews. \
+   When indexing is enabled, 'search_context(query, limit=5)' returns ranked keyword \
+   matches with character spans, line ranges, page ranges, and snippets. It uses literal \
+   token matching, not semantic search. Use the returned spans to read the original context.
 5. Full use of 'print()' to observe intermediate results between rounds.
 
 You will only see truncated REPL output, so use llm_query() for semantic analysis. Use variables \

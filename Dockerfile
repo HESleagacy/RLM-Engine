@@ -18,6 +18,27 @@ COPY demo/ ./demo/
 
 RUN python -m pip install ".[demo]" "gunicorn==23.0.0"
 
+FROM base AS pdf
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/*
+RUN python -m pip install ".[ocr]"
+RUN mkdir -p /home/rlm/.cache && chown rlm:rlm /home/rlm/.cache
+
+USER rlm
+CMD ["rlm-pdf", "--help"]
+
+FROM pdf AS pdf-test
+
+USER root
+RUN python -m pip install ".[dev]"
+COPY tests/ ./tests/
+
+ENV RLM_REQUIRE_OCR_TEST=1
+USER rlm
+CMD ["python", "-m", "pytest", "-q", "-m", "pdf", "-p", "no:cacheprovider"]
+
 FROM base AS test
 
 RUN python -m pip install ".[dev]"

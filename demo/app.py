@@ -24,6 +24,9 @@ from layer8_evaluation.benchmarks.consistency import (
     build_query,
     build_scattered_document,
 )
+from shared.resource_errors import (
+    ResourceExhaustedError, WorkerTerminatedError, report_resource_errors, resource_error,
+)
 
 app = Flask(__name__, static_folder=str(Path(__file__).parent / "static"))
 MAX_DOCUMENT_CHARS = 250_000
@@ -47,7 +50,13 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
+@app.errorhandler(ResourceExhaustedError)
+def resource_failure_response(exc):
+    return jsonify({"error": str(exc), "code": exc.code}), 503
+
+
 @app.route("/api/generate", methods=["POST"])
+@report_resource_errors
 def api_generate():
     data = request.get_json(silent=True) or {}
     if not isinstance(data, dict):
@@ -62,6 +71,7 @@ def api_generate():
 
 
 @app.route("/api/run", methods=["POST"])
+@report_resource_errors
 def api_run():
     data = request.get_json(silent=True) or {}
     if not isinstance(data, dict):
@@ -99,7 +109,12 @@ def api_run():
                     },
                 }
             )
-        except Exception:
+        except Exception as exc:
+            failure = resource_error(exc)
+            if failure is not None:
+                return resource_failure_response(failure)
+            if isinstance(exc, WorkerTerminatedError):
+                return jsonify({"error": str(exc), "code": exc.code}), 502
             return jsonify({"error": "RLM pipeline failed"}), 502
     finally:
         PIPELINE_SLOTS.release()

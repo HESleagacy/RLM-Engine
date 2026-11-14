@@ -17,6 +17,9 @@ from layer2_controller.planner import PlanAction, Planner
 from layer3_execution.runtime_engine import RuntimeEngine
 from layer6_output.finalizer import FINAL, FinalAnswer
 from layer6_output.output_manager import OutputManager
+from shared.resource_errors import (
+    ResourceExhaustedError, WorkerTerminatedError, report_resource_errors, resource_error,
+)
 
 if TYPE_CHECKING:
     from layer1_input.context_repr import MountedContext
@@ -46,6 +49,7 @@ class RootController:
 
     # ── Legacy single-round method (all existing tests use this) ──────────────
 
+    @report_resource_errors
     def run_round(self, ctx: "MountedContext", instruction: str) -> dict[str, Any]:
         """Single round: plan → codegen → exec → record. Used by tests."""
         plan = self.planner.next_step(self.flow.iteration, has_more=True)
@@ -61,6 +65,7 @@ class RootController:
 
     # ── Gap 4 & 5: Full RLM REPL loop ─────────────────────────────────────────
 
+    @report_resource_errors
     def run_until_done(self, ctx: "MountedContext", query: str) -> FinalAnswer:
         """
         Primary RLM entry point for long-context reasoning.
@@ -91,6 +96,11 @@ class RootController:
                     history=history,
                 )
             except Exception as exc:  # noqa: BLE001 - terminate under control limits
+                failure = resource_error(exc)
+                if failure is not None:
+                    if failure is exc:
+                        raise
+                    raise failure from exc
                 return FINAL(f"Execution stopped: {type(exc).__name__}: {exc}")
 
             # Gap 5: FINAL_VAR — resolve variable name from REPL state
@@ -109,6 +119,12 @@ class RootController:
             # Execute the repl code block
             result = self.runtime.execute(step.code)
             self.flow.advance()
+            # Resource failures must reach the caller, not become an empty answer
+            # or cause more LLM requests against an exhausted device.
+            if result.error_code in ("out_of_memory", "disk_full"):
+                raise ResourceExhaustedError(result.error_code, result.error or "")
+            if result.error_code == "worker_terminated":
+                raise WorkerTerminatedError(result.error or "Execution worker terminated")
 
             # Collect intermediate result values
             if result.ok and result.value is not None:
