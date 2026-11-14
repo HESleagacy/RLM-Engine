@@ -1,7 +1,7 @@
 # RLM Engine — Recursive Language Model
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-83%20passing-brightgreen.svg)](#-testing)
+[![Tests](https://img.shields.io/badge/tests-242%20passing-brightgreen.svg)](#-testing)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 > **A controlled reasoning engine that thinks under control, under cost, and under verification.**
@@ -79,6 +79,8 @@ Options:
   to use disk-backed access.
 - `--context-block-chars`: characters per cached block.
 - `--context-cache-blocks`: maximum cached blocks; `0` disables caching.
+- `--context-cache-bytes`: estimated DRAM budget for cached blocks and their
+  bookkeeping (4 MiB by default). Oversized blocks are read but not retained.
 
 In Python:
 
@@ -111,6 +113,69 @@ docker compose -f compose.yaml -f compose.storage.yaml run --rm app rlm --contex
 Documents in the repository's `data/` directory are excluded from image builds.
 Keep other private documents outside the build context. Mount only the directory
 you intend the engine to read, not an entire drive.
+
+### Local indexing, metadata, and DRAM acceleration
+
+The existing sparse character index enables slicing. An additional persistent
+**SQLite FTS5 index** enables ranked keyword retrieval over overlapping chunks:
+
+```bash
+# Local retrieval; no LLM/API key required. --search implies --index.
+rlm --context-file document.txt --search "rotary position embedding"
+
+# Inspect statistics and structural previews without inference.
+rlm --context-file document.txt --index --show-metadata
+
+# Make indexed search available to the reasoning controller.
+rlm --context-file document.txt --index --use-groq --query "Explain RoPE."
+```
+
+The default index directory is `~/.cache/rlm-engine/indexes`; `--index-dir` can
+point to an internal drive or external SSD. Source SHA-256, chunk settings, and
+index schema/normalization version determine reuse. Source files are not changed
+and do not need to be writable. Index directories contain document text: keep
+them private. Index creation scans the input; reusing an index still hashes the
+source to validate identity. There is no automatic on-disk index eviction.
+
+Results contain a ranked score, bounded snippet, original character span, line
+range, and physical page-marker range where available. Read the original span
+to inspect the source. Queries use literal-token AND matching, not embeddings
+or semantic reasoning. FTS operators are not executed. Up to 64 terms/1,000
+query characters and 100 results are supported. Chunks default to 2,048
+characters with 128-character overlap (`--index-chunk-chars`, `--index-overlap`).
+Character chunking can split unusually long tokens; full line filtering remains
+available. PDF spacing such as `isRotary` is split in the **index only**; returned
+snippets can therefore have normalized spacing while spans address exact input.
+
+```python
+from layer1_input import MountedContext, describe
+from layer5_context_access import ContextIndex
+
+ctx = MountedContext.from_file("document.txt")
+index = ContextIndex.build(ctx, "/path/to/private-index-cache")
+print(index.search("rotary embedding", limit=5))
+print(index.cache_info)
+print(describe(ctx))
+```
+
+Metadata now includes exact byte/character/whitespace-word counts, LF-based line
+counts, paragraph counts, code-fence detection, page-marker counts, and heading
+hints with character offsets. Heading/page previews are capped at 32 entries;
+the search index retains all detected page markers. Headings are heuristic
+(Markdown/numbered titles), not a semantic outline. `estimated_tokens` is a rough
+four-characters-per-token estimate, not a tokenizer count or billing measure.
+
+**DRAM is used in three places:** small inputs stay resident, file reads use an
+LRU block cache, and repeated searches use a bounded hot-result LRU. The search
+cache budget defaults to 4 MiB (`--index-cache-bytes`), split between estimated
+hot-result storage and SQLite's requested page-cache budget. Hot entries include
+query-key/bookkeeping estimates and are also capped at 1,024 entries. A zero
+budget disables these caches. The OS may additionally cache disk pages.
+
+Python caches are per process/worker; they are not a shared cross-worker RAM
+pool. SQLite connections are opened read-only for queries and are not shared
+across forks. Cache budgets are not hard process-RAM limits: returned objects,
+index construction, Python allocators, and OS caching consume additional memory.
 
 ### Local Python installation
 
@@ -150,6 +215,132 @@ PYTHONPATH=src python3 -m src.main --prompt "Hello world"
 # Installed CLI
 rlm --prompt "Hello world"
 ```
+
+---
+
+## PDF input (preprocessing, not an engine change)
+
+Convert a PDF to a UTF-8 text artifact, then pass that artifact to the existing
+context loader. No PDF-specific controller logic or REPL tools are involved.
+
+```bash
+pip install -e ".[pdf]"
+rlm-pdf "/path/to/report.pdf" --no-ocr
+```
+
+The command prints **only the completed text file's absolute path**. Use that
+path with the normal CLI:
+
+```bash
+rlm --context-file "/printed/path/content.txt" --use-groq --query "Summarize the report."
+```
+
+### Scanned or mixed PDFs
+
+```bash
+pip install -e ".[ocr]"
+rlm-pdf "/path/to/scanned-report.pdf"
+```
+
+OCR additionally requires the **Tesseract executable** and language data on the
+host. Install these through your OS package manager or use the Docker image below.
+OCR runs locally; PDFium renders pages and Tesseract recognizes text. Conversion
+itself makes no cloud requests.
+
+- Embedded text is used whenever a page contains at least one non-whitespace
+  character. Pages with content but insufficient text are OCR'd individually.
+- For pages containing only a short caption over a scanned image, raise
+  `--min-text-chars` to trigger OCR (a heuristic, not layout classification).
+- `--language eng+hin`, `--dpi 150`, and `--ocr-timeout 60` configure OCR.
+  The selected Tesseract language packs must be installed.
+- Truly blank pages without a content stream get a page marker without OCR.
+  OCR that returns no readable text is an error, not silent data loss.
+- `--no-ocr` explicitly fails when a page requires OCR.
+
+### Artifacts and limits
+
+Pages are written incrementally, with `--- Page N ---` separators. The default
+cache is `~/.cache/rlm-engine/pdf`; use `--cache-dir` to put it on an internal drive
+or external SSD. Each content-addressed artifact contains:
+
+```text
+<artifact-id>/
+├── content.txt
+└── manifest.json   # Provenance, statistics, page spans/methods, text checksum
+```
+
+The manifest records source filename/size/hash, available embedded PDF metadata
+(without guessing missing author/title fields), UTC conversion time, aggregate
+text statistics, and each page's extraction method and exact UTF-8 byte and
+character offsets. Page spans exclude separators. Counts and offsets are
+validated against the real 20-page acceptance fixture. Metadata schema changes
+invalidate previous conversion-cache keys; old artifacts are not modified.
+
+Conversions are reused only when the source hash and conversion settings match,
+and cached text is checksum-verified. Failed conversions leave no completed
+artifact. Encrypted, malformed, and zero-page PDFs fail before reasoning starts.
+Conversion defaults limit inputs to 100 MiB and 1,000 pages, extracted text to
+1,000,000 characters per page, and OCR renders to 25 million pixels. The Python
+API accepts overrides; `--max-pages` is also available in the CLI.
+
+The resulting text uses the same 1 MiB RAM/disk cutoff as ordinary text files.
+Tables, columns, diagrams, and reading order may not survive plain-text
+conversion accurately; page markers are not verified citations. OCR quality
+depends on scan quality and language data. Parsing/rendering is not a security
+sandbox, and these validation limits are not hard process memory limits.
+
+Artifacts contain document information. Keep the cache private and remove it
+explicitly when no longer needed. Conversion caches do not expire automatically.
+
+### Docker with local OCR
+
+The default web image stays lightweight. The optional PDF image includes
+Tesseract with English language data, PDFium, and the PDF Python dependencies:
+
+```bash
+docker build --target pdf -t rlm-engine-pdf .
+docker run --rm --init --mount "type=bind,src=/absolute/document-directory,dst=/data,readonly" --mount "type=volume,src=rlm-pdf-cache,dst=/home/rlm/.cache" rlm-engine-pdf rlm-pdf /data/report.pdf
+```
+
+Use the printed container path with `rlm` in the same image and cache volume:
+
+```bash
+docker run --rm --init --mount "type=volume,src=rlm-pdf-cache,dst=/home/rlm/.cache,readonly" rlm-engine-pdf rlm --context-file "/home/rlm/.cache/rlm-engine/pdf/<artifact-id>/content.txt"
+```
+
+Add `--env-file .env` to `docker run`, then `--use-groq --query "..."` to `rlm`
+for live inference. Live inference may send document excerpts to the LLM
+provider; PDF preprocessing alone is local.
+
+---
+
+## Resource failure reporting
+
+Recoverable resource failures are reported with stable error codes:
+
+| Code | Meaning |
+| --- | --- |
+| `disk_full` | Disk space exhausted (`ENOSPC`) or storage quota reached (`EDQUOT`) |
+| `out_of_memory` | Python allocation failure (`MemoryError`) or OS `ENOMEM` |
+| `worker_terminated` | An execution/OCR worker died; the cause is unknown, not confirmed OOM |
+
+The PDF and engine CLIs print an actionable error to stderr and exit with status
+1. Python conversion/mount APIs raise `shared.resource_errors.ResourceExhaustedError`
+with a `.code`; worker death raises `WorkerTerminatedError`. `RuntimeEngine.execute()`
+returns `ok=False`, `error`, and `error_code`. The multi-round controller stops and
+passes the exception to its caller instead of returning an empty/successful answer
+or making further LLM calls.
+
+The demo API returns `{"error": "...", "code": "..."}` with HTTP 503 for resource
+exhaustion and HTTP 502 for unexpected worker termination. Interrupted conversion
+attempts clean up owned temporary artifacts when the process can unwind; they do
+not publish partial documents.
+
+This is **error reporting, not resource prevention**: no disk quotas, automatic
+on-disk cache eviction, or hard process-RAM limits are imposed. DRAM cache budgets
+do not bound all process allocations. A main process killed by the OS cannot
+return an error or run cleanup. Reporting under severe memory exhaustion is
+best-effort.
 
 ---
 
@@ -226,6 +417,8 @@ The system is organized into **8 distinct layers**, each with a single responsib
 | `by_regex(pattern)` | Filter lines by regex |
 | `chunker(size, overlap)` | Collect fixed windows in a list |
 | `iter_chunks(size, overlap=0)` | Stream fixed windows on demand |
+| `context_info()` | Document counts and bounded structural previews |
+| `search_context(query, limit=5)` | Ranked local keyword matches when `--index` is enabled |
 | `print()` | Observe intermediate results |
 
 ---
@@ -253,17 +446,31 @@ All settings live in [`configs/default.yaml`](configs/default.yaml):
 # Run all tests
 pytest -q
 
-# Run a specific layer's tests
-pytest -q tests/test_execution.py
+# Run the execution/storage workflow tests
+pytest -q tests/test_storage_workflow.py
 
 # Run only the RAM/disk storage workflow regressions
 pytest -q -m storage
+
+# Run PDF preprocessing tests
+pytest -q -m pdf
+
+# Run acceptance tests against the supplied Mathematics of LLMs paper
+pytest -q -m pdf1
+
+# Run simulated disk-full, memory-exhaustion, and worker-death tests
+pytest -q -m resources
+
+# Run persistent indexing, metadata, and DRAM cache tests
+pytest -q -m indexing
 
 # Verbose output
 pytest -v
 ```
 
-**Current status: 83 tests passing across 12 test suites.**
+**Current local status (Tesseract and OCR extras available): 242 passing across 13 test suites.**
+The real-OCR test requires Tesseract and the OCR extras and is mandatory in the
+`pdf-test` Docker target.
 
 Tests run offline with mocked LLM responses and temporary document files.
 See [`tests/README.md`](tests/README.md) for the storage contract and CI coverage.
@@ -273,15 +480,16 @@ See [`tests/README.md`](tests/README.md) for the storage contract and CI coverag
 | `test_input_layer.py` | Layer 1: normalize, mount, metadata |
 | `test_file_context.py` | File context API, UTF-8 slicing, metadata, serialization, and validation |
 | `test_storage_workflow.py` | Bounded I/O, caching, source lifecycle, multi-round REPL, and CLI errors |
-| `test_controller.py` | Layer 2: single-round controller flow |
+| `test_pdf_ingestion.py` | Scanned/mixed PDF edge cases, OCR limits/errors, and malformed inputs |
+| `test_pdf1_acceptance.py` | 49 real-paper acceptance cases: extraction, page landmarks, caching, retrieval, RAM/disk, and CLI |
 | `test_code_generator.py` | Layer 2: LLM output → executable Python |
-| `test_execution.py` | Layer 3: sandboxed exec + result capture |
 | `test_recursion.py` | Layer 4: sub-LLM invocation via guard |
-| `test_context_access.py` | Layer 5: probe, filter, chunk |
 | `test_output.py` | Layer 6: intermediate → FINAL aggregation |
 | `test_control.py` | Layer 7: step limits, budget, recursion guard |
 | `test_evaluation.py` | Layer 8: metrics + benchmark smoke test |
 | `test_regressions.py` | Cross-layer security and control regressions |
+| `test_resource_errors.py` | Resource classification, partial-file cleanup, worker death, CLI exit codes, and API responses |
+| `test_indexing.py` | Persistent search, UTF-8/page spans, richer metadata, cache budgets/hits, invalidation, and CLI/REPL integration |
 
 ---
 
@@ -329,7 +537,7 @@ RLM-Engine/
 │   ├── layer7_control/           # Budget, steps, recursion guards
 │   ├── layer8_evaluation/        # Benchmarks, baselines, metrics
 │   └── shared/                   # Types, constants, Groq client, utils
-├── tests/                        # Per-layer test suites (83 tests passing)
+├── tests/                        # Per-layer and PDF ingestion regression suites
 ├── pyproject.toml                # Build config + dependencies
 └── CONTEXT.md                    # Detailed architecture analysis
 ```
