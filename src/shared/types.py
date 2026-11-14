@@ -9,12 +9,33 @@ JSONish = Any
 
 
 @dataclass(frozen=True, slots=True)
+class PageMarker:
+    number: int
+    start_char: int
+
+
+@dataclass(frozen=True, slots=True)
+class HeadingHint:
+    title: str
+    level: int
+    start_char: int
+
+
+@dataclass(frozen=True, slots=True)
 class StructureHints:
-    """Lightweight hints about prompt structure (Layer 1 metadata)."""
+    """Content-derived statistics; page/heading previews are capped at 32 items."""
 
     line_count: int = 0
     paragraph_count: int = 0
     has_code_fence: bool = False
+    character_count: int = 0
+    byte_count: int = 0
+    word_count: int = 0
+    estimated_tokens: int = 0
+    page_count: int = 0
+    heading_count: int = 0
+    page_markers: tuple[PageMarker, ...] = ()
+    headings: tuple[HeadingHint, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +48,7 @@ class ExecutionResult:
     locals_snapshot: Mapping[str, Any] = field(default_factory=dict)
     # Gap 3: stdout captured from print() calls inside exec()
     stdout: str = ""
+    error_code: str | None = None
 
 
 class LLMCallable(Protocol):

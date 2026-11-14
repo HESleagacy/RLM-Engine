@@ -17,6 +17,16 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=7.0",
+  "pypdf>=5.0",
+  "flask>=3.0",
+]
+pdf = [
+  "pypdf>=5.0",
+]
+ocr = [
+  "pypdf>=5.0",
+  "pypdfium2>=4.30",
+  "pillow>=10.1",
 ]
 groq = [
   "groq>=0.11.0",
@@ -30,6 +40,7 @@ demo = [
 
 [project.scripts]
 rlm = "main:main"
+rlm-pdf = "document_ingestion.pdf_to_text:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -44,3 +55,10 @@ configs = ["*.yaml"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "storage: hybrid RAM/file context workflow and regression tests",
+  "pdf: PDF extraction, local OCR, and text artifact ingestion",
+  "pdf1: acceptance tests against the user-provided Mathematics of LLMs paper",
+  "resources: simulated disk-full, allocation failure, and worker-death handling",
+  "indexing: persistent search, metadata, and byte-budgeted DRAM caching",
+]

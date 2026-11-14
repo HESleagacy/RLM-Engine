@@ -40,18 +40,36 @@ def test_timeout_terminates_generated_code():
     assert time.monotonic() - started < 2
 
 
-def test_mounted_context_cannot_be_rebound():
+@pytest.mark.parametrize("file_backed", [False, True], ids=["ram", "disk"])
+@pytest.mark.parametrize("timeout", [None, 5], ids=["inline", "worker"])
+def test_temporary_rebinding_does_not_replace_mounted_context_or_query(tmp_path, file_backed, timeout):
+    """Rebinding is intentionally allowed locally, but never persisted."""
+    path = tmp_path / "context.txt"
+    path.write_text("original", encoding="utf-8")
+    context = (
+        MountedContext.from_file(path, memory_threshold_bytes=0)
+        if file_backed else MountedContext("original")
+    )
     state = StateStore()
-    state.set("context", "original")
+    state.set("context", context.text)
+    state.set("query", "original query")
     runtime = RuntimeEngine(
-        state, ToolInterface(), protected_names={"context", "query"}
+        state, ToolInterface(), protected_names={"context", "query"},
+        timeout_seconds=timeout,
     )
 
-    result = runtime.execute("context = 'rebound'\nresult = context")
+    result = runtime.execute(
+        "context = 'rebound'\nquery = 'temporary query'\nresult = (context, query)"
+    )
 
     assert result.ok
-    assert result.value == "rebound"
-    assert state.get("context") == "original"
+    assert result.value == ("rebound", "temporary query")
+    assert state.get("context") is context.text
+    assert state.get("query") == "original query"
+    following_round = runtime.execute("result = (context[:], query)")
+    assert following_round.ok
+    assert following_round.value == ("original", "original query")
+    assert path.read_text(encoding="utf-8") == "original"
 
 
 def test_controller_parser_handles_parentheses_in_final_answer():

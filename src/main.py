@@ -7,11 +7,15 @@ tool in ToolInterface so generated REPL code can call llm_query(...).
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import importlib.resources
+import json
+import sys
 from pathlib import Path
 
 from layer1_input.context_repr import MountedContext
 from layer1_input.raw_loader import normalize
+from layer1_input.metadata_provider import describe
 from layer2_controller.code_generator import CodeGenerator
 from layer2_controller.controller import RootController
 from layer3_execution.runtime_engine import RuntimeEngine
@@ -22,6 +26,8 @@ from layer5_context_access import (
     by_keyword,
     by_regex,
     fixed_windows,
+    iter_windows,
+    ContextIndex,
     peek_head,
     peek_tail,
 )
@@ -30,6 +36,9 @@ from layer7_control.execution_monitor import ExecutionMonitor
 from layer7_control.recursion_guard import RecursionGuard
 from layer7_control.step_limiter import StepLimiter
 from shared.utils import load_yaml_config
+from shared.resource_errors import (
+    ResourceExhaustedError, WorkerTerminatedError, report_resource_errors, resource_error,
+)
 
 
 def _load_dotenv_if_present() -> None:
@@ -57,6 +66,7 @@ def build_system(
     use_groq: bool = False,
     root_model: str | None = None,
     sub_model: str | None = None,
+    context_index: ContextIndex | None = None,
 ) -> tuple[RootController, ExecutionMonitor]:
     cfg = load_yaml_config(config_path)
     ctrl_cfg = cfg.get("control", {})
@@ -104,6 +114,23 @@ def build_system(
     tools.register("by_keyword", wrap_tool(by_keyword))
     tools.register("by_regex", wrap_tool(by_regex))
     tools.register("chunker", wrap_tool(fixed_windows))
+    tools.register("iter_chunks", wrap_tool(iter_windows))
+
+    def check_index():
+        if context_index is None:
+            raise ValueError("No search index is mounted; enable --index")
+        if state.get("context") is not context_index.context.text:
+            raise ValueError("Search index does not match the mounted context; rebuild the index")
+        return context_index
+
+    tools.register("search_context", lambda query, limit=5: check_index().search(query, limit=limit))
+
+    def context_info():
+        if context_index is not None:
+            return json.loads(json.dumps(check_index().metadata["structure"]))
+        return asdict(describe(MountedContext(state.get("context", ""))))
+
+    tools.register("context_info", context_info)
 
     codegen: CodeGenerator | None = None
 
@@ -143,7 +170,8 @@ def build_system(
     return controller, monitor
 
 
-def main() -> None:
+@report_resource_errors
+def _main() -> None:
     _load_dotenv_if_present()
     p = argparse.ArgumentParser(description="RLM — Recursive Language Model Engine")
     p.add_argument(
@@ -151,11 +179,31 @@ def main() -> None:
         default=default_config_path(),
         help="Path to YAML config",
     )
-    p.add_argument(
+    source = p.add_mutually_exclusive_group()
+    source.add_argument(
         "--prompt",
         default="Hello",
         help="Raw context text to mount as P (the long document/corpus)",
     )
+    source.add_argument(
+        "--context-file", type=Path,
+        help="UTF-8 document on any local drive (large files use disk-backed reads)",
+    )
+    p.add_argument(
+        "--memory-threshold-bytes", type=int, default=1_048_576,
+        help="Largest file to keep in RAM; use 0 to force non-empty files onto disk",
+    )
+    p.add_argument("--context-block-chars", type=int, default=65_536)
+    p.add_argument("--context-cache-blocks", type=int, default=8)
+    p.add_argument("--context-cache-bytes", type=int, default=4_194_304)
+    p.add_argument("--index", action="store_true", help="Build/reuse a local full-text chunk index")
+    p.add_argument("--index-dir", type=Path, default=Path.home() / ".cache" / "rlm-engine" / "indexes")
+    p.add_argument("--index-chunk-chars", type=int, default=2048)
+    p.add_argument("--index-overlap", type=int, default=128)
+    p.add_argument("--index-cache-bytes", type=int, default=4_194_304)
+    inspect = p.add_mutually_exclusive_group()
+    inspect.add_argument("--search", help="Search locally and print JSON (implies --index; no LLM call)")
+    inspect.add_argument("--show-metadata", action="store_true", help="Print document metadata as JSON without inference")
     p.add_argument(
         "--query",
         default=None,
@@ -178,25 +226,84 @@ def main() -> None:
     )
     args = p.parse_args()
 
+    try:
+        if args.context_file is not None:
+            ctx = MountedContext.from_file(
+                args.context_file,
+                memory_threshold_bytes=args.memory_threshold_bytes,
+                block_chars=args.context_block_chars,
+                cache_blocks=args.context_cache_blocks,
+                max_cache_bytes=args.context_cache_bytes,
+            )
+        else:
+            ctx = MountedContext(text=normalize(args.prompt))
+    except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+        failure = resource_error(exc)
+        if failure is not None:
+            raise failure from exc
+        p.error(str(exc))
+
+    context_index = None
+    try:
+        if args.index or args.search is not None:
+            context_index = ContextIndex.build(
+                ctx, args.index_dir, chunk_chars=args.index_chunk_chars,
+                overlap=args.index_overlap, dram_cache_bytes=args.index_cache_bytes,
+            )
+        if args.show_metadata:
+            print(json.dumps({
+                "storage_backend": ctx.storage_backend,
+                "structure": context_index.metadata["structure"] if context_index else asdict(describe(ctx)),
+                "index": context_index.metadata if context_index else None,
+            }, indent=2, ensure_ascii=False))
+            return
+        if args.search is not None:
+            print(json.dumps({
+                "matches": context_index.search(args.search),
+                "cache": context_index.cache_info,
+            }, indent=2, ensure_ascii=False))
+            return
+    except (OSError, ValueError, RuntimeError) as exc:
+        failure = resource_error(exc)
+        if failure is not None:
+            raise failure from exc
+        p.error(str(exc))
+
     controller, monitor = build_system(
         args.config,
         use_groq=args.use_groq,
         root_model=args.root_model,
         sub_model=args.sub_model,
+        context_index=context_index,
     )
-    ctx = MountedContext(text=normalize(args.prompt))
 
     if args.query and args.use_groq:
         # Full RLM REPL loop
-        print(f"[RLM] mounting context ({len(ctx.text):,} chars), query: {args.query!r}")
+        print(
+            f"[RLM] mounting context ({len(ctx.text):,} chars, "
+            f"{ctx.storage_backend}), query: {args.query!r}"
+        )
         answer = controller.run_until_done(ctx, args.query)
         print("\n── Final Answer ──")
         print(answer.text)
     else:
         # Legacy single-round mode (no --query or no --use-groq)
         out = controller.run_round(ctx, instruction="Set result to a short echo of the prompt.")
+        execution = out.get("execution")
+        if execution is not None and execution.error_code in ("disk_full", "out_of_memory"):
+            raise ResourceExhaustedError(execution.error_code, execution.error or "")
+        if execution is not None and execution.error_code == "worker_terminated":
+            raise WorkerTerminatedError(execution.error or "Execution worker terminated")
         print("execution:", out)
         print("monitor:", monitor.snapshot())
+
+
+def main() -> None:
+    try:
+        _main()
+    except (ResourceExhaustedError, WorkerTerminatedError) as exc:
+        print(f"rlm: error: [{exc.code}] {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

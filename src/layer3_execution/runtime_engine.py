@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import io
 import multiprocessing
+from multiprocessing.connection import wait
 import traceback
 from typing import Any
 
@@ -15,9 +16,10 @@ from layer7_control.step_limiter import StepLimiter
 from layer7_control.budget_manager import BudgetManager
 from layer7_control.token_tracker import TokenTracker
 from shared.types import ExecutionResult
+from shared.resource_errors import resource_error
 
 
-def _execute_worker(
+def _execute_payload(
     code: str,
     state_data: dict[str, Any],
     tool_namespace: dict[str, Any],
@@ -25,9 +27,8 @@ def _execute_worker(
     protected_names: set[str],
     budget: BudgetManager | None,
     token_tracker: TokenTracker | None,
-    connection: Any,
-) -> None:
-    """Run one generated program in a killable child process."""
+) -> tuple[Any, ...]:
+    """Run generated code and collect its result, or a small failure payload."""
     buf = io.StringIO()
     budget_before = budget.used if budget else 0
     events_before = len(token_tracker.counts) if token_tracker else 0
@@ -56,10 +57,31 @@ def _execute_worker(
             and not (callable(value) and key in tool_names)
         }
         budget_delta, events = usage()
-        connection.send((True, globals_.get("result"), updates, None, buf.getvalue(), budget_delta, events))
+        return (True, globals_.get("result"), updates, None, buf.getvalue(), budget_delta, events, None)
     except Exception as exc:  # noqa: BLE001 - return generated-code failures
+        failure = resource_error(exc)
+        if failure is not None:
+            # Avoid formatting tracebacks or copying stdout after allocation failure.
+            try:
+                budget_delta, events = usage()
+            except MemoryError:
+                budget_delta, events = 0, []
+            return (False, None, {}, str(failure), "", budget_delta, events, failure.code)
         budget_delta, events = usage()
-        connection.send((False, None, {}, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}", buf.getvalue(), budget_delta, events))
+        return (False, None, {}, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}", buf.getvalue(), budget_delta, events, None)
+
+
+def _execute_worker(*args: Any) -> None:
+    """Send a payload from a killable worker; serialization can fail too."""
+    *execution_args, connection = args
+    try:
+        connection.send(_execute_payload(*execution_args))
+    except Exception as exc:
+        failure = resource_error(exc)
+        connection.send((
+            False, None, {}, str(failure) if failure else f"{type(exc).__name__}: {exc}",
+            "", 0, [], failure.code if failure else None,
+        ))
     finally:
         connection.close()
 
@@ -97,7 +119,7 @@ class RuntimeEngine:
     def _result_from_payload(
         self, payload: tuple[Any, ...], *, apply_usage: bool = True
     ) -> ExecutionResult:
-        ok, value, updates, error, stdout, budget_delta, token_events = payload
+        ok, value, updates, error, stdout, budget_delta, token_events, error_code = payload
         if apply_usage and self.budget and budget_delta:
             self.budget.spend(budget_delta)
         if apply_usage and self.token_tracker and token_events:
@@ -111,20 +133,36 @@ class RuntimeEngine:
             error=error,
             locals_snapshot=self.state.as_dict(),
             stdout=stdout,
+            error_code=error_code,
         )
 
     def execute(self, code: str) -> ExecutionResult:
+        try:
+            return self._execute(code)
+        except Exception as exc:
+            failure = resource_error(exc)
+            return ExecutionResult(
+                ok=False,
+                error=str(failure) if failure else f"{type(exc).__name__}: {exc}",
+                error_code=failure.code if failure else None,
+            )
+
+    def _execute(self, code: str) -> ExecutionResult:
         try:
             if self.step_limiter is not None:
                 self.step_limiter.tick()
             if self.strict_sandbox:
                 validate_code(code)
         except Exception as exc:  # noqa: BLE001 - expose controlled failures
-            return ExecutionResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+            failure = resource_error(exc)
+            return ExecutionResult(
+                ok=False, error=str(failure) if failure else f"{type(exc).__name__}: {exc}",
+                error_code=failure.code if failure else None,
+            )
 
         if self.timeout_seconds is None:
-            parent, child = multiprocessing.Pipe(duplex=False)
-            _execute_worker(
+            # No IPC in inline mode: sending a large payload to ourselves can block.
+            payload = _execute_payload(
                 code,
                 self.state.as_dict(),
                 self.tools.as_namespace(),
@@ -132,39 +170,57 @@ class RuntimeEngine:
                 self.protected_names,
                 self.budget,
                 self.token_tracker,
-                child,
             )
-            child.close()
-            return self._result_from_payload(parent.recv(), apply_usage=False)
+            return self._result_from_payload(payload, apply_usage=False)
 
         context = multiprocessing.get_context("fork")
         parent, child = context.Pipe(duplex=False)
-        process = context.Process(
-            target=_execute_worker,
-            args=(
-                code,
-                self.state.as_dict(),
-                self.tools.as_namespace(),
-                self.strict_sandbox,
-                self.protected_names,
-                self.budget,
-                self.token_tracker,
-                child,
-            ),
-        )
-        process.start()
-        child.close()
+        process = None
+        started = False
         try:
-            if not parent.poll(self.timeout_seconds):
-                process.terminate()
-                process.join()
+            process = context.Process(
+                target=_execute_worker,
+                args=(
+                    code,
+                    self.state.as_dict(),
+                    self.tools.as_namespace(),
+                    self.strict_sandbox,
+                    self.protected_names,
+                    self.budget,
+                    self.token_tracker,
+                    child,
+                ),
+            )
+            process.start()
+            started = True
+            child.close()
+            ready = wait([parent, process.sentinel], timeout=self.timeout_seconds)
+            if not ready:
                 return ExecutionResult(
                     ok=False,
                     error=f"TimeoutError: execution exceeded {self.timeout_seconds:g} seconds",
                 )
-            return self._result_from_payload(parent.recv())
+            if parent in ready or parent.poll():
+                try:
+                    return self._result_from_payload(parent.recv())
+                except (EOFError, ConnectionError):
+                    pass
+            process.join(timeout=0.2)
+            return ExecutionResult(
+                ok=False,
+                error=(
+                    f"Execution worker terminated without returning a result "
+                    f"(exit code {process.exitcode}). The OS may have killed it or it may "
+                    "have crashed; memory exhaustion cannot be confirmed."
+                ),
+                error_code="worker_terminated",
+            )
         finally:
-            if process.is_alive():
-                process.terminate()
-            process.join()
+            child.close()
+            if process is not None:
+                if started:
+                    if process.is_alive():
+                        process.terminate()
+                    process.join()
+                process.close()
             parent.close()

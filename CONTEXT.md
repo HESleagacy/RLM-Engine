@@ -19,7 +19,10 @@ Ingest arbitrary-length prompts and store them in an external execution environm
 
 * `raw_loader.normalize()` → strip/normalize whitespace from raw text
 * `context_repr.MountedContext` → frozen dataclass wrapping the immutable prompt `P`
-* `metadata_provider.describe()` → returns `StructureHints` (line count, paragraph count, code fence detection)
+* `metadata_provider.describe()` → streaming `StructureHints`: byte/character/word counts,
+  line/paragraph counts, code fences, estimated tokens, and bounded page/heading previews
+* `MountedContext.from_file()` → RAM for small files, disk-backed reads with a
+  byte-budgeted per-process LRU for large files
 
 ### Principle
 
@@ -110,6 +113,9 @@ Control how data is read from the mounted context.
 * `filter.by_keyword()` / `by_regex()` — line-level filtering
 * `chunker.fixed_windows()` — character-level chunking with configurable overlap
 * `traversal.lines_as_tree()` — degenerate tree representation (placeholder for real AST)
+* `context_index.ContextIndex` — optional persistent SQLite FTS5 chunk index with
+  source-hash/config invalidation, original character/line/page ranges, and a
+  byte-budgeted DRAM hot-result cache
 
 ### Insight
 
@@ -117,7 +123,10 @@ Read less, extract more.
 
 ### Tools Registered in REPL
 
-`peek_head`, `peek_tail`, `by_keyword`, `by_regex`, `chunker` (via `main.py` wiring)
+`peek_head`, `peek_tail`, `by_keyword`, `by_regex`, `chunker`, `iter_chunks`,
+`context_info`, and optional indexed `search_context` (via `main.py` wiring).
+Indexing is local lexical retrieval, not semantic reasoning. DRAM caches are
+per process; they do not impose a global process-memory limit.
 
 ---
 
@@ -237,20 +246,25 @@ User provides --prompt (context) + --query
 
 # TEST STATUS
 
-**19 tests pass across 10 test modules**:
+See `README.md` and `tests/README.md` for current counts and test commands.
+The suite now uses workflow and resource-failure regressions instead of the
+superseded execution/controller/context-access smoke tests:
 
 | Test | Status |
 |------|--------|
 | `test_code_generator.py` (2 tests) | ✅ |
-| `test_context_access.py` | ✅ |
 | `test_control.py` | ✅ |
-| `test_controller.py` | ✅ |
 | `test_evaluation.py` | ✅ |
-| `test_execution.py` | ✅ |
 | `test_input_layer.py` | ✅ |
 | `test_output.py` | ✅ |
 | `test_recursion.py` | ✅ |
 | `test_regressions.py` | ✅ |
+| `test_file_context.py` | ✅ |
+| `test_storage_workflow.py` | ✅ |
+| `test_pdf_ingestion.py` | ✅ |
+| `test_pdf1_acceptance.py` | ✅ |
+| `test_resource_errors.py` | ✅ |
+| `test_indexing.py` | ✅ |
 
 ---
 
@@ -432,14 +446,18 @@ project-root/
 └── tests/
     ├── __init__.py
     ├── test_input_layer.py
-    ├── test_controller.py
     ├── test_code_generator.py
-    ├── test_execution.py
     ├── test_recursion.py
-    ├── test_context_access.py
     ├── test_output.py
     ├── test_control.py
-    └── test_evaluation.py
+    ├── test_evaluation.py
+    ├── test_regressions.py
+    ├── test_file_context.py
+    ├── test_storage_workflow.py
+    ├── test_pdf_ingestion.py
+    ├── test_pdf1_acceptance.py
+    ├── test_resource_errors.py
+    └── test_indexing.py
 ```
 
 ---

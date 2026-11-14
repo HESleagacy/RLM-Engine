@@ -37,11 +37,20 @@ final answer.
 Your context has {context_total_length} total characters and is stored in the 'context' variable.
 
 The REPL environment provides:
-1. A 'context' variable containing the full context for your query. Always inspect it before answering.
+1. A 'context' variable providing the context for your query. Always inspect it before answering.
+    Small contexts are strings; large file contexts are read-only, disk-backed objects supporting \
+    len(context), context[index], and context[start:stop]. Do not assume string methods are available. \
+    str(context) on a disk-backed context is only a descriptor, not the document. \
+    Use iter_chunks(size, overlap=0) to stream chunks and the context tools to search lines. \
+    Avoid context[:] or collecting all chunks, which loads the entire document into RAM.
 2. A 'query' variable containing the user's question.
 3. A 'llm_query(prompt: str) -> str' function to query a sub-LLM inside the REPL. The sub-LLM \
     can handle around 200K characters per call.
 4. Context tools including 'peek_head', 'peek_tail', 'by_keyword', 'by_regex', and 'chunker'.
+   'context_info()' returns document statistics and bounded heading/page previews. \
+   When indexing is enabled, 'search_context(query, limit=5)' returns ranked keyword \
+   matches with character spans, line ranges, page ranges, and snippets. It uses literal \
+   token matching, not semantic search. Use the returned spans to read the original context.
 5. Full use of 'print()' to observe intermediate results between rounds.
 
 You will only see truncated REPL output, so use llm_query() for semantic analysis. Use variables \
