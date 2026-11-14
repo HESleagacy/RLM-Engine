@@ -104,14 +104,8 @@ def test_invalid_utf8_is_rejected(tmp_path, threshold):
         MountedContext.from_file(path, memory_threshold_bytes=threshold)
 
 
-def test_cli_accepts_file_context_and_rejects_conflicting_sources(tmp_path):
+def test_cli_rejects_conflicting_context_sources(tmp_path):
     path, _ = mount(tmp_path, "Hello from disk")
-    result = subprocess.run([
-        sys.executable, "-m", "main", "--context-file", str(path),
-        "--memory-threshold-bytes", "0",
-    ], capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stderr
-    assert "Hello from disk" in result.stdout
     conflict = subprocess.run([
         sys.executable, "-m", "main", "--context-file", str(path), "--prompt", "other",
     ], capture_output=True, text=True, timeout=30)

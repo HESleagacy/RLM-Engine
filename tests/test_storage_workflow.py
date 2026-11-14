@@ -189,16 +189,18 @@ def test_invalid_chunk_parameters_fail_before_reading(tmp_path, file_reads, size
     assert not file_reads.lines
 
 
-def test_searches_stream_lines_without_full_string_reads(tmp_path, file_reads):
+@pytest.mark.parametrize("threshold", [0, 1000], ids=["disk", "ram"])
+def test_searches_match_in_both_backends_without_full_file_reads(tmp_path, file_reads, threshold):
     path = tmp_path / "search.txt"
     path.write_bytes("Alpha\r\nβeta target\nTARGET again\nend".encode("utf-8"))
-    ctx = MountedContext.from_file(path, memory_threshold_bytes=0, block_chars=2)
+    ctx = MountedContext.from_file(path, memory_threshold_bytes=threshold, block_chars=2)
     file_reads.path = path
     assert by_keyword(ctx, "target") == ["βeta target", "TARGET again"]
     assert by_regex(ctx, r"^βeta.*target$") == ["βeta target"]
     assert file_reads.sizes == []
-    assert len(file_reads.lines) == 8  # Two scans, four lines each.
-    assert not ctx.text._cache
+    assert len(file_reads.lines) == (8 if ctx.storage_backend == "file" else 0)
+    if ctx.storage_backend == "file":
+        assert not ctx.text._cache
 
 
 def test_source_replacement_during_indexing_is_rejected(tmp_path, file_reads):

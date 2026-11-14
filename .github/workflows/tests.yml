@@ -45,3 +45,13 @@ jobs:
             rlm --context-file /data/document.txt --memory-threshold-bytes 0 \
             > result.txt
           grep -F "value='Hello from mounted storage'" result.txt
+
+  pdf:
+    name: PDF extraction and real local OCR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test PDF ingestion with Tesseract and PDFium installed
+        run: |
+          docker build --target pdf-test -t rlm-pdf-test .
+          docker run --rm --init rlm-pdf-test

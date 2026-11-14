@@ -1,0 +1,72 @@
+{
+  "title": "The Simple Mathematics of Large Language Models",
+  "author": "Joseph L. Breeden",
+  "sha256": "6444d94d202b56eab9158a8b55b0a6da6619836bb847c98f4a3ba223db26ae92",
+  "physical_page_count": 20,
+  "pages": [
+    {"number": 1, "anchors": ["The Simple Mathematics of Large Language Models", "Joseph L. Breeden", "January 2026"]},
+    {"number": 2, "anchors": ["9 December 2025", "Abstract", "Contents"]},
+    {"number": 3, "anchors": ["Depth: Stacking Multiple Layers", "Mathematical Summary", "Conclusion"]},
+    {"number": 4, "anchors": ["Tokens: The Atoms of Text", "50,000 tokens"]},
+    {"number": 5, "anchors": ["chain rule of probability", "finite-order Markov models"]},
+    {"number": 6, "anchors": ["one-hot", "polysemy"]},
+    {"number": 7, "anchors": ["Learned Weighted Averaging", "The Concept of Influence"]},
+    {"number": 8, "anchors": ["Computing Influence Scores", "dot product"]},
+    {"number": 9, "anchors": ["Query", "Key", "Value", "three transformations"]},
+    {"number": 10, "anchors": ["A Note on Bilinear Forms", "A Note on Identifiability"]},
+    {"number": 11, "anchors": ["inverse multinomial logit", "The Complete Operation", "Multiple Relations"]},
+    {"number": 12, "anchors": ["attention head", "emergent, not engineered"]},
+    {"number": 13, "anchors": ["Nonlinear Transformations", "ReLU", "Incremental Refinement"]},
+    {"number": 14, "anchors": ["Rotary Position Embedding", "ALiBi", "The Transformer Architecture"]},
+    {"number": 15, "anchors": ["Maximum Likelihood", "multinomial logistic regression"]},
+    {"number": 16, "anchors": ["Kullback-Leibler divergence", "negative log-likelihood"]},
+    {"number": 17, "anchors": ["RLHF", "GPT-3", "175 billion"]},
+    {"number": 18, "anchors": ["No grounding", "Hallucination", "No formal reasoning", "Context limitations", "Mathematical Summary"]},
+    {"number": 19, "anchors": ["Conclusion", "References", "The mathematics is not exotic"]},
+    {"number": 20, "anchors": ["Attention is all you need", "WordNet: A lexical database for English"]}
+  ],
+  "retrieval_cases": [
+    {
+      "id": "author",
+      "question": "Who wrote the paper?",
+      "physical_page": 2,
+      "search_regex": "Joseph L",
+      "required_terms": ["Joseph L. Breeden"]
+    },
+    {
+      "id": "vocabulary",
+      "question": "What approximate vocabulary size does the paper describe?",
+      "physical_page": 4,
+      "search_regex": "50,000",
+      "required_terms": ["50,000 tokens"]
+    },
+    {
+      "id": "projections",
+      "question": "What standard names are given to the three transformations?",
+      "physical_page": 9,
+      "search_regex": "Query|Key|Value",
+      "required_terms": ["Query", "Key", "Value"]
+    },
+    {
+      "id": "relative-position",
+      "question": "What does RoPE stand for?",
+      "physical_page": 14,
+      "search_regex": "Rotary|Position Embedding",
+      "required_terms": ["Rotary Position Embedding", "RoPE"]
+    },
+    {
+      "id": "cross-entropy",
+      "question": "What divergence relates cross-entropy to entropy?",
+      "physical_page": 16,
+      "search_regex": "Kullback",
+      "required_terms": ["Kullback-Leibler divergence"]
+    },
+    {
+      "id": "limitations",
+      "question": "Which four limitations does section 11.3 list?",
+      "physical_page": 18,
+      "search_regex": "No grounding|Hallucination:|No formal reasoning|Context limitations:",
+      "required_terms": ["No grounding", "Hallucination", "No formal reasoning", "Context limitations"]
+    }
+  ]
+}
