@@ -27,6 +27,7 @@ from layer8_evaluation.benchmarks.consistency import (
 from shared.resource_errors import (
     ResourceExhaustedError, WorkerTerminatedError, report_resource_errors, resource_error,
 )
+from layer2_controller.outcome import RunFailedError
 
 app = Flask(__name__, static_folder=str(Path(__file__).parent / "static"))
 MAX_DOCUMENT_CHARS = 250_000
@@ -42,7 +43,7 @@ def run_rlm(document: str, query: str) -> str:
 
     controller, _ = build_system(default_config_path(), use_groq=True)
     context = MountedContext(text=normalize(document))
-    return controller.run_until_done(context, query).text
+    return controller.run_until_done(context, query).require_answer()
 
 
 @app.route("/")
@@ -110,6 +111,11 @@ def api_run():
                 }
             )
         except Exception as exc:
+            if isinstance(exc, RunFailedError):
+                return jsonify({
+                    "error": str(exc), "code": exc.code,
+                    "status": exc.outcome.status, "stop_reason": exc.outcome.stop_reason,
+                }), exc.status_code
             failure = resource_error(exc)
             if failure is not None:
                 return resource_failure_response(failure)

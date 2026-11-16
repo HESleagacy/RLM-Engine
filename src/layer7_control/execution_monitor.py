@@ -21,7 +21,10 @@ class ExecutionMonitor:
     def snapshot(self) -> dict[str, Any]:
         return {
             "steps": {"current": self.steps.current, "max": self.steps.max_steps},
-            "budget": {"used": self.budget.used, "limit": self.budget.limit},
+            "budget": {
+                "used": self.budget.used, "limit": self.budget.limit,
+                "reserved": self.budget.reserved, "uncertain": self.budget.uncertain,
+            },
             "recursion_depth": self.recursion.depth,
             "token_events": len(self.tokens.counts),
         }

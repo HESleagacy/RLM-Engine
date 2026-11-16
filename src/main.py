@@ -18,6 +18,8 @@ from layer1_input.raw_loader import normalize
 from layer1_input.metadata_provider import describe
 from layer2_controller.code_generator import CodeGenerator
 from layer2_controller.controller import RootController
+from layer2_controller.outcome import RunFailedError
+from layer2_controller.planner import Planner
 from layer3_execution.runtime_engine import RuntimeEngine
 from layer3_execution.state_store import StateStore
 from layer3_execution.tool_interface import ToolInterface
@@ -36,6 +38,8 @@ from layer7_control.execution_monitor import ExecutionMonitor
 from layer7_control.recursion_guard import RecursionGuard
 from layer7_control.step_limiter import StepLimiter
 from shared.utils import load_yaml_config
+from shared.model_call import RetryPolicy
+from shared.model_errors import ModelError
 from shared.resource_errors import (
     ResourceExhaustedError, WorkerTerminatedError, report_resource_errors, resource_error,
 )
@@ -67,6 +71,8 @@ def build_system(
     root_model: str | None = None,
     sub_model: str | None = None,
     context_index: ContextIndex | None = None,
+    protocol: str | None = None,
+    allow_unverified: bool = False,
 ) -> tuple[RootController, ExecutionMonitor]:
     cfg = load_yaml_config(config_path)
     ctrl_cfg = cfg.get("control", {})
@@ -84,6 +90,12 @@ def build_system(
     root_model = root_model or rlm_cfg.get("root_model", "llama-3.3-70b-versatile")
     sub_model = sub_model or rlm_cfg.get("sub_model", "llama-3.1-8b-instant")
     max_subcalls = int(cfg.get("recursion", {}).get("max_subcalls_per_step", 4))
+    protocol = protocol or rlm_cfg.get("protocol", "json")
+    retry_policy = RetryPolicy(
+        max_attempts=int(rlm_cfg.get("max_provider_attempts", 3)),
+        backoff_seconds=float(rlm_cfg.get("retry_backoff_seconds", 0.5)),
+        request_timeout_seconds=float(rlm_cfg.get("request_timeout_seconds", 30)),
+    )
 
     steps = StepLimiter(max_steps=max_steps)
     budget = BudgetManager(limit=token_budget)
@@ -123,7 +135,8 @@ def build_system(
             raise ValueError("Search index does not match the mounted context; rebuild the index")
         return context_index
 
-    tools.register("search_context", lambda query, limit=5: check_index().search(query, limit=limit))
+    if context_index is not None:
+        tools.register("search_context", lambda query, limit=5: check_index().search(query, limit=limit))
 
     def context_info():
         if context_index is not None:
@@ -133,12 +146,13 @@ def build_system(
     tools.register("context_info", context_info)
 
     codegen: CodeGenerator | None = None
+    rec_manager = None
 
     if use_groq:
         from shared.groq_client import make_groq_chat, make_groq_llm
 
         # Sub-LLM: cheaper/faster model for recursive sub-calls
-        sub_llm = make_groq_llm(model=sub_model)
+        sub_llm = make_groq_llm(model=sub_model, timeout_seconds=retry_policy.request_timeout_seconds)
 
         # Gap 2: wire llm_query tool → RecursionManager → sub-LLM
         # Generated REPL code calls llm_query("...") which hits sub_llm
@@ -148,17 +162,33 @@ def build_system(
             budget=budget,
             token_tracker=monitor.tokens,
             max_subcalls_per_step=max_subcalls,
+            retry_policy=retry_policy,
         )
         tools.register("llm_query", rec_manager.run_subtask)
+        runtime.before_step = rec_manager.begin_step
 
         # Root LLM: stronger model for the root controller
-        root_llm = make_groq_llm(model=root_model)
-        root_chat = make_groq_chat(model=root_model)
+        root_llm = make_groq_llm(model=root_model, timeout_seconds=retry_policy.request_timeout_seconds)
+        root_chat = make_groq_chat(
+            model=root_model, timeout_seconds=retry_policy.request_timeout_seconds,
+            json_mode=protocol == "json",
+        )
         codegen = CodeGenerator(
             llm=root_llm,
             chat=root_chat,
             budget=budget,
             token_tracker=monitor.tokens,
+            protocol=protocol, retry_policy=retry_policy,
+            max_input_tokens=int(rlm_cfg.get("max_input_tokens", 24_000)),
+            context_window_tokens=int(rlm_cfg.get("context_window_tokens", 32_768)),
+            output_tokens=int(rlm_cfg.get("output_tokens", 4096)),
+        )
+    else:
+        codegen = CodeGenerator(
+            protocol=protocol, budget=budget, token_tracker=monitor.tokens,
+            max_input_tokens=int(rlm_cfg.get("max_input_tokens", 24_000)),
+            context_window_tokens=int(rlm_cfg.get("context_window_tokens", 32_768)),
+            output_tokens=int(rlm_cfg.get("output_tokens", 4096)), retry_policy=retry_policy,
         )
 
     controller = RootController(
@@ -166,6 +196,15 @@ def build_system(
         codegen=codegen,
         max_rounds=max_rounds,
         stdout_truncation=stdout_trunc,
+        max_repairs=int(rlm_cfg.get("max_repairs", 2)),
+        max_execution_failures=int(rlm_cfg.get("max_execution_failures", 3)),
+        wall_clock_seconds=float(ctrl_cfg.get("wall_clock_seconds", 300)),
+        require_evidence=bool(rlm_cfg.get("require_evidence", True)) and not allow_unverified,
+        recursion_manager=rec_manager,
+        planner=Planner(
+            max_repeated_actions=int(rlm_cfg.get("max_repeated_actions", 2)),
+            max_stagnant_steps=int(rlm_cfg.get("max_stagnant_steps", 3)),
+        ),
     )
     return controller, monitor
 
@@ -201,6 +240,8 @@ def _main() -> None:
     p.add_argument("--index-chunk-chars", type=int, default=2048)
     p.add_argument("--index-overlap", type=int, default=128)
     p.add_argument("--index-cache-bytes", type=int, default=4_194_304)
+    p.add_argument("--protocol", choices=["json", "legacy"], default=None)
+    p.add_argument("--allow-unverified", action="store_true", help="Explicitly allow final answers without source references")
     inspect = p.add_mutually_exclusive_group()
     inspect.add_argument("--search", help="Search locally and print JSON (implies --index; no LLM call)")
     inspect.add_argument("--show-metadata", action="store_true", help="Print document metadata as JSON without inference")
@@ -225,6 +266,10 @@ def _main() -> None:
         help="Groq model for recursive sub-LLM calls (llm_query)",
     )
     args = p.parse_args()
+    if args.query is not None and not args.query.strip():
+        p.error("--query must not be empty")
+    if args.query is not None and not args.use_groq and args.search is None and not args.show_metadata:
+        p.error("--query requires --use-groq; configure custom offline models through the Python API")
 
     try:
         if args.context_file is not None:
@@ -275,6 +320,8 @@ def _main() -> None:
         root_model=args.root_model,
         sub_model=args.sub_model,
         context_index=context_index,
+        protocol=args.protocol,
+        allow_unverified=args.allow_unverified,
     )
 
     if args.query and args.use_groq:
@@ -283,9 +330,11 @@ def _main() -> None:
             f"[RLM] mounting context ({len(ctx.text):,} chars, "
             f"{ctx.storage_backend}), query: {args.query!r}"
         )
-        answer = controller.run_until_done(ctx, args.query)
+        outcome = controller.run_until_done(ctx, args.query)
+        answer = outcome.require_answer()
         print("\n── Final Answer ──")
-        print(answer.text)
+        print(answer)
+        print(f"[verification: {outcome.verification}]")
     else:
         # Legacy single-round mode (no --query or no --use-groq)
         out = controller.run_round(ctx, instruction="Set result to a short echo of the prompt.")
@@ -301,7 +350,7 @@ def _main() -> None:
 def main() -> None:
     try:
         _main()
-    except (ResourceExhaustedError, WorkerTerminatedError) as exc:
+    except (ResourceExhaustedError, WorkerTerminatedError, RunFailedError, ModelError) as exc:
         print(f"rlm: error: [{exc.code}] {exc}", file=sys.stderr)
         raise SystemExit(1) from None
 

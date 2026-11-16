@@ -61,4 +61,5 @@ markers = [
   "pdf1: acceptance tests against the user-provided Mathematics of LLMs paper",
   "resources: simulated disk-full, allocation failure, and worker-death handling",
   "indexing: persistent search, metadata, and byte-budgeted DRAM caching",
+  "controller: structured Layer 2 lifecycle, evidence, budgets, and model recovery",
 ]

@@ -36,6 +36,12 @@ For indexing, richer metadata, and DRAM caches:
 python -m pytest -q -m indexing
 ```
 
+For Layer 2 controller and provider-accounting regressions:
+
+```bash
+python -m pytest -q -m controller
+```
+
 No API key, external SSD, internet connection, or downloaded benchmark is needed.
 Temporary directories represent either an internal disk or a mounted external
 drive. In-process TCP connections are blocked by `conftest.py` so accidental
@@ -91,6 +97,8 @@ execution. No strict rebinding prohibition is implemented or expected by tests.
 - Six evidence-retrieval cases: author, vocabulary size, Q/K/V terminology,
   RoPE expansion, KL divergence, and the four listed limitations.
 - Each retrieval case through the existing controller in both storage backends.
+- Strict JSON actions and actual source-read references for both RAM/disk runs,
+  returning `provenance_validated` outcomes rather than legacy marker responses.
 - Cache reuse, corruption checks, source relocation, limits, and CLI-to-CLI flow.
 
 Expected answers and page landmarks are in `tests/fixtures/pdf1/expected.json`.
@@ -146,6 +154,9 @@ than exhausting the actual test machine. They cover:
 
 No disk or process-wide RAM quotas or automatic on-disk eviction are implemented. True
 host-wide OOM and killing the main process cannot guarantee a Python response.
+The primary controller now reports these failures in a noncompleted `RunOutcome`;
+conversion/mount APIs still raise resource exceptions. Callers using
+`require_answer()` receive `RunFailedError`, never a successful error string.
 
 ## Indexing and DRAM contract
 
@@ -169,6 +180,35 @@ DRAM budgets cover estimated Python-cache storage and requested SQLite page
 cache, not all process allocations or the OS file cache. Caches are per process,
 not a cross-worker shared-memory service. Token counts are explicitly estimates;
 heading detection and page markers are structural hints, not semantic assertions.
+
+## Layer 2 contract
+
+`test_layer2_controller.py` and `test_model_calls.py` cover the structured
+controller and its model boundary:
+
+- Exactly one strict JSON action; duplicate/mixed fields, invalid names/types,
+  oversized data, marker strings, Unicode, apostrophes, and explicit legacy mode.
+- Typed terminal outcomes, finite repair allowance, missing/empty variables,
+  partial candidates, round/step limits, repeated actions, and execution failures.
+- Host-issued source-read references: wrong hashes, unread/changed spans, bounded
+  ledgers, provenance-only labeling, and optional external verifier acceptance.
+- Terminal flow behavior, cancellation during requests/execution, busy-controller
+  protection, and cleanup after a run. Only test-owned execution workers are killed.
+- Bounded head/tail stdout, separate errors, retained latest diagnostics after
+  compaction, safe bounded state summaries, and preflight input-window rejection.
+- Atomic input/output reservations, concurrent reservation safety, recorded
+  overruns, conservative unknown charges, and budgets preserved between runs.
+- Bounded retry/backoff/Retry-After behavior, permanent-error classification,
+  deadlines, SDK retries disabled, JSON mode, and request timeout forwarding.
+- Explicit subcall-counter reset in inline and worker paths, and child-to-parent
+  reconciliation of known/uncertain usage.
+- CLI failures returning nonzero and HTTP failures never producing/scoring a story.
+
+No live LLM requests are made. Transport tests use synthetic providers and a
+fake Groq client, not real credentials. Tokenizer-independent accounting uses a
+conservative byte estimate; it is not a guarantee of the provider's billed usage.
+Phase/state progress is heuristic; provenance validation is not a truth checker.
+The supported primary return type is `RunOutcome`, replacing `FinalAnswer`.
 
 ## Continuous integration
 
