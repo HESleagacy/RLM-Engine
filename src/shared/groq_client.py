@@ -29,21 +29,24 @@ def make_groq_llm(
     model: str = _DEFAULT_SUB_MODEL,
     *,
     temperature: float = 0.2,
+    timeout_seconds: float = 30,
 ) -> "LLMCallable":
     """Single-turn LLMCallable — compatible with CodeGenerator / RecursionManager."""
     from groq import Groq  # type: ignore[import]
 
-    client = Groq(api_key=groq_api_key())
+    request_timeout = timeout_seconds
+    client = Groq(api_key=groq_api_key(), max_retries=0, timeout=request_timeout)
 
-    def call(prompt: str, *, max_tokens: int | None = None) -> tuple[str, int]:
+    def call(prompt: str, *, max_tokens: int | None = None, timeout_seconds: float | None = None) -> tuple[str, int | None]:
         completion = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=temperature,
             max_tokens=max_tokens or 1024,
+            timeout=timeout_seconds or request_timeout,
         )
         msg = completion.choices[0].message
-        tokens = completion.usage.total_tokens if completion.usage else 0
+        tokens = completion.usage.total_tokens if completion.usage else None
         return ((msg.content or "").strip(), tokens)
 
     return call
@@ -53,6 +56,8 @@ def make_groq_chat(
     model: str = _DEFAULT_ROOT_MODEL,
     *,
     temperature: float = 0.2,
+    timeout_seconds: float = 30,
+    json_mode: bool = True,
 ) -> "ChatCallable":
     """Multi-turn ChatCallable — accepts list[dict] messages, returns str.
 
@@ -60,25 +65,29 @@ def make_groq_chat(
     """
     from groq import Groq  # type: ignore[import]
 
-    client = Groq(api_key=groq_api_key())
+    request_timeout = timeout_seconds
+    client = Groq(api_key=groq_api_key(), max_retries=0, timeout=request_timeout)
 
     def chat(
-        messages: list[dict[str, str]], *, max_tokens: int | None = None
-    ) -> tuple[str, int]:
+        messages: list[dict[str, str]], *, max_tokens: int | None = None,
+        timeout_seconds: float | None = None,
+    ) -> tuple[str, int | None]:
         completion = client.chat.completions.create(
             model=model,
             messages=messages,  # type: ignore[arg-type]
             temperature=temperature,
             max_tokens=max_tokens or 4096,
+            timeout=timeout_seconds or request_timeout,
+            **({"response_format": {"type": "json_object"}} if json_mode else {}),
         )
         msg = completion.choices[0].message
-        tokens = completion.usage.total_tokens if completion.usage else 0
+        tokens = completion.usage.total_tokens if completion.usage else None
         return ((msg.content or "").strip(), tokens)
 
     return chat
 
 
-def optional_groq_llm() -> Callable[..., tuple[str, int]] | None:
+def optional_groq_llm() -> Callable[..., tuple[str, int | None]] | None:
     """If GROQ_API_KEY is set, return Groq caller; else None."""
     if not os.environ.get("GROQ_API_KEY", "").strip():
         return None

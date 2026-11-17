@@ -49,12 +49,17 @@ class ExecutionResult:
     # Gap 3: stdout captured from print() calls inside exec()
     stdout: str = ""
     error_code: str | None = None
+    evidence_records: tuple[dict, ...] = ()
+    stdout_truncated: bool = False
 
 
 class LLMCallable(Protocol):
     """Single-turn LLM: prompt → (response, tokens). Used by CodeGenerator / RecursionManager."""
 
-    def __call__(self, prompt: str, *, max_tokens: int | None = None) -> tuple[str, int]: ...
+    def __call__(
+        self, prompt: str, *, max_tokens: int | None = None,
+        timeout_seconds: float | None = None,
+    ) -> tuple[str, int | None]: ...
 
 
 class ChatCallable(Protocol):
@@ -65,7 +70,8 @@ class ChatCallable(Protocol):
         messages: list[dict[str, str]],
         *,
         max_tokens: int | None = None,
-    ) -> tuple[str, int]: ...
+        timeout_seconds: float | None = None,
+    ) -> tuple[str, int | None]: ...
 
 
 SubtaskHandler = Callable[[str, Mapping[str, Any]], str]

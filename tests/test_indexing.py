@@ -298,21 +298,32 @@ def test_pdf1_index_metadata_page_spans_and_existing_repl(tmp_path):
     matches = index.search("Rotary Position Embedding")
     assert matches
     assert any(hit["page_start"] <= 14 <= hit["page_end"] for hit in matches)
+    body = next(hit for hit in matches if hit["page_start"] <= 14 <= hit["page_end"])
     assert index.metadata["structure"]["page_count"] == 20
     controller, _ = build_system(default_config_path(), context_index=index)
-    responses = iter([
-        "```repl\n"
+    code = (
         "matches = search_context('Rotary Position Embedding')\n"
         "metadata = context_info()\n"
         "for match in matches:\n"
         "    if match['page_start'] <= 14 <= match['page_end']:\n"
-        "        result = context[match['start_char']:match['end_char']]\n"
-        "        break\n```",
-        "FINAL_VAR(result)",
+        "        source_read = read_context(match['start_char'], match['end_char'])\n"
+        "        result = source_read['text']\n"
+        "        break"
+    )
+    responses = iter([
+        json.dumps({"action": "execute", "code": code}),
+        json.dumps({
+            "action": "finalize_variable", "name": "result",
+            "evidence": [{
+                "document_hash": index.metadata["source_sha256"],
+                "start_char": body["start_char"], "end_char": body["end_char"],
+            }],
+        }),
     ])
     controller.codegen = CodeGenerator(chat=lambda *args, **kwargs: (next(responses), 0))
     answer = controller.run_until_done(ctx, "Where is RoPE explained?")
-    assert "Rotary" in answer.text and "RoPE" in answer.text
+    assert "Rotary" in answer.require_answer() and "RoPE" in answer.require_answer()
+    assert answer.verification == "provenance_validated"
     assert controller.runtime.state.get("metadata")["page_count"] == 20
     assert not ctx.text._cache or ctx.text.cache_info["bytes"] <= ctx.text.max_cache_bytes
 

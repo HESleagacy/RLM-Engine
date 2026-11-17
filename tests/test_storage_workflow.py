@@ -3,6 +3,8 @@
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 import os
+import hashlib
+import json
 import subprocess
 import sys
 
@@ -283,9 +285,7 @@ def test_multiple_repl_rounds_preserve_file_aliases_and_bounded_state(tmp_path):
     )
     controller, monitor = build_system(default_config_path())
     seen_messages = []
-    responses = iter([
-        "```repl\nalias = context\nhead = peek_head(5)\nprint(head)\n```",
-        "```repl\n"
+    second_code = (
         "count = 0\n"
         "for chunk in iter_chunks(4):\n"
         "    count += len(chunk)\n"
@@ -294,16 +294,28 @@ def test_multiple_repl_rounds_preserve_file_aliases_and_bounded_state(tmp_path):
         "legacy_chunks = chunker(4)\n"
         "result = head + ':' + alias[-5:]\n"
         "print(result)\n"
-        "```",
-        "FINAL_VAR(result)",
+    )
+    responses = iter([
+        json.dumps({
+            "action": "execute",
+            "code": "source = read_context(0, len(context))\nalias = context\nhead = peek_head(5)\nprint(head)",
+        }),
+        json.dumps({"action": "execute", "code": second_code}),
+        json.dumps({
+            "action": "finalize_variable", "name": "result",
+            "evidence": [{
+                "document_hash": hashlib.sha256(b"alpha\nbeta\nomega").hexdigest(),
+                "start_char": 0, "end_char": 16,
+            }],
+        }),
     ])
 
-    def chat(messages, *, max_tokens=None):
+    def chat(messages, *, max_tokens=None, timeout_seconds=None):
         seen_messages.append(messages)
         return next(responses), 0
 
     controller.codegen = CodeGenerator(chat=chat)
-    assert controller.run_until_done(ctx, "Read both ends").text == "alpha:omega"
+    assert controller.run_until_done(ctx, "Read both ends").require_answer() == "alpha:omega"
     assert monitor.steps.current == 2
     assert controller.runtime.state.get("count") == len(ctx.text)
     assert controller.runtime.state.get("hits") == ["beta"]
@@ -313,7 +325,7 @@ def test_multiple_repl_rounds_preserve_file_aliases_and_bounded_state(tmp_path):
     alias = controller.runtime.state.get("alias")
     assert isinstance(alias, FileBackedText)
     assert not alias._cache  # IPC sent the descriptor, not cached blocks.
-    assert not ctx.text._cache
+    assert ctx.text.cache_info["blocks"] <= 1
     assert path.read_text(encoding="utf-8") == "alpha\nbeta\nomega"
 
 
@@ -326,14 +338,23 @@ def test_reused_controller_switches_backends_without_leaking_previous_context(tm
         contexts.append(MountedContext.from_file(path, memory_threshold_bytes=threshold))
     for index, ctx in enumerate(contexts):
         responses = iter([
-            "```repl\nresult = peek_head(100) + ':' + query\n```",
-            "FINAL_VAR(result)",
+            json.dumps({
+                "action": "execute",
+                "code": "source = read_context(0, len(context))\nresult = peek_head(100) + ':' + query",
+            }),
+            json.dumps({
+                "action": "finalize_variable", "name": "result",
+                "evidence": [{
+                    "document_hash": hashlib.sha256(f"document-{index}".encode()).hexdigest(),
+                    "start_char": 0, "end_char": len(f"document-{index}"),
+                }],
+            }),
         ])
         controller.codegen = CodeGenerator(chat=lambda *args, **kwargs: (next(responses), 0))
         answer = controller.run_until_done(ctx, f"query-{index}")
-        assert answer.text == f"document-{index}:query-{index}"
+        assert answer.require_answer() == f"document-{index}:query-{index}"
         assert controller.runtime.state.get("context") is ctx.text
-        assert controller.flow.iteration == 1
+        assert controller.flow.iteration == 2
 
 
 def test_worker_reports_unavailable_source_without_overwriting_mounted_context(tmp_path):

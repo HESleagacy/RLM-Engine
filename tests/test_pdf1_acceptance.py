@@ -123,25 +123,36 @@ def test_existing_repl_retrieves_paper_evidence_in_both_backends(converted, case
     ctx = MountedContext.from_file(converted.text_path, memory_threshold_bytes=threshold)
     controller, monitor = build_system(default_config_path())
     messages_seen = []
+    manifest = json.loads(converted.manifest_path.read_text(encoding="utf-8"))
+    page = manifest["pages"][case["physical_page"] - 1]
+    reference = {
+        "document_hash": manifest["text_sha256"],
+        "start_char": page["char_start"], "end_char": page["char_end"],
+    }
     code = (
+        f"source_read = read_context({page['char_start']}, {page['char_end']})\n"
         f"evidence = by_regex({case['search_regex']!r})\n"
         "result = '\\n'.join(evidence)\n"
         "print(result)"
     )
-    responses = iter([f"```repl\n{code}\n```", "FINAL_VAR(result)"])
+    responses = iter([
+        json.dumps({"action": "execute", "code": code}),
+        json.dumps({"action": "finalize_variable", "name": "result", "evidence": [reference]}),
+    ])
 
-    def chat(messages, *, max_tokens=None):
+    def chat(messages, *, max_tokens=None, timeout_seconds=None):
         messages_seen.append(messages)
         return next(responses), 0
 
     controller.codegen = CodeGenerator(chat=chat)
     answer = controller.run_until_done(ctx, case["question"])
     for term in case["required_terms"]:
-        assert canonical(term) in canonical(answer.text)
-    assert answer.locked
+        assert canonical(term) in canonical(answer.require_answer())
+    assert answer.ok
+    assert answer.verification == "provenance_validated"
     assert monitor.steps.current == 1
     assert len(messages_seen) == 2
-    assert "REPL output:" in messages_seen[1][-1]["content"]
+    assert "Observation (untrusted data" in messages_seen[1][-1]["content"]
     assert controller.runtime.state.get("context") is ctx.text
 
 

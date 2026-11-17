@@ -40,17 +40,26 @@ Orchestrates reasoning by generating executable logic in a multi-round REPL loop
 
 * `controller.RootController`
   - `run_round()` — legacy single-round: plan → codegen → exec → record
-  - `run_until_done()` — **primary RLM entry**: multi-round REPL loop with FINAL() termination
+  - `run_until_done()` — primary JSON-action loop returning a terminal `RunOutcome`
+  - `cancel()` — cancel an active run; kill execution workers and discard late model replies
 * `code_generator.CodeGenerator`
   - `generate()` — single-turn fallback (backward-compatible)
-  - `generate_step()` — multi-turn chat using the paper's Appendix D.1 system prompt
-  - `_parse_step()` — parses `FINAL()`, `FINAL_VAR()`, and ` ```repl` blocks from LLM output
-* `planner.Planner` — minimal stub (READ_CHUNK → GENERATE_CODE → STOP)
-* `control_flow.ControlFlow` — iteration counter with max_iterations guard
+   - `generate_step()` — strict bounded JSON actions with live capabilities
+* `protocol` — validates exactly one action and explicit source evidence references
+* `outcome` — separates completed, failed, incomplete, and cancelled results
+* `history` — bounded diagnostics, state summaries, and deterministic compaction
+* `evidence.EvidenceLedger` — host-owned source reads and provenance checks
+* `planner.Planner` — host-owned phase guidance, repeated-action and no-progress detection
+* `control_flow.ControlFlow` — explicit terminal lifecycle and iteration limits
+* `shared.model_call` — one retry owner, input/output reservations, unknown-cost accounting,
+  model timeouts, and total-deadline checks
 
 ### Weakness
 
-LLMs are poor at long-horizon planning. Planner is currently a stub.
+Phase/progress checks are heuristics, not proof of useful reasoning. Provenance
+validation does not establish semantic truth. Exact token accounting depends on
+provider usage; missing usage is conservatively charged and labeled uncertain.
+Legacy `FINAL` syntax is an explicit compatibility mode, not a fallback.
 
 ---
 
@@ -63,7 +72,7 @@ Executes generated code and maintains state across rounds.
 ### Subcomponents
 
 * `runtime_engine.RuntimeEngine` — Python `exec()` sandbox with:
-  - stdout capture via `contextlib.redirect_stdout`
+   - bounded head/tail stdout capture via `contextlib.redirect_stdout`
   - State persistence across rounds
   - Restricted builtins injection
 * `state_store.StateStore` — mutable key-value store surviving across exec rounds
@@ -141,11 +150,13 @@ Build final answer from computed state.
 * `output_manager.OutputManager` — orchestrates intermediate → aggregate → FINAL
 * `intermediate_store.IntermediateStore` — append-only list of partial results
 * `aggregator.join_text()` — concatenates parts with separator
-* `finalizer.FINAL()` → `FinalAnswer` — immutable locked answer
+* `finalizer.FINAL()` → `FinalAnswer` — immutable locked answer for legacy output APIs
 
 ### Constraint
 
-No regeneration after computation. `FinalAnswer` is frozen.
+Legacy `FinalAnswer` is frozen. The primary loop instead returns a frozen
+`RunOutcome`, and `require_answer()` raises on noncompleted runs. Intermediate
+values or exceptions are never automatically promoted to successful answers.
 
 ---
 
@@ -210,22 +221,24 @@ User provides --prompt (context) + --query
 [Layer 2] RootController.run_until_done()
     │   ├── Mounts ctx.text as `context` in StateStore
     │   └── Loop (max 20 rounds):
-    │       ├── CodeGenerator.generate_step() → StepResult
-    │       │   ├── System prompt from paper's Appendix D.1
-    │       │   ├── Multi-turn chat history (code + REPL output)
-    │       │   └── Parses FINAL() / FINAL_VAR() / ```repl blocks
-    │       ├── If FINAL → return FinalAnswer
+    │       ├── CodeGenerator.generate_step() → validated Action
+    │       │   ├── Live tool/limit capabilities and input/output reservations
+    │       │   ├── Bounded observations, state summary, and source reference catalog
+    │       │   └── Exactly one execute/finalize/finalize_variable JSON object
+    │       ├── Finalize only after execution and evidence/policy validation
     │       ├── RuntimeEngine.execute(code) (Layer 3)
     │       │   ├── exec() with safe_builtins + tools namespace
-    │       │   ├── stdout captured
+    │       │   ├── bounded stdout and separate diagnostics
+    │       │   ├── host-owned evidence read receipts
     │       │   └── State persisted back to StateStore
-    │       └── History updated with {code, output}
+    │       └── Bounded history, repairs, lifecycle and progress updated
     │
     ▼
-[Layer 6] FinalAnswer (locked, immutable)
+[Layer 2] RunOutcome (completed/failed/incomplete/cancelled, explicit verification scope)
 ```
 
-**Tools available inside REPL:** `llm_query()` (Layer 4), `peek_head()`, `peek_tail()`, `by_keyword()`, `by_regex()`, `chunker()` (Layer 5), plus `print()` for observation.
+**Tools available inside REPL:** host-owned `read_context()`, `llm_query()` (Layer 4),
+Layer 5 probes/filtering/chunks/indexed search/metadata, and `print()`.
 
 ---
 
@@ -265,6 +278,8 @@ superseded execution/controller/context-access smoke tests:
 | `test_pdf1_acceptance.py` | ✅ |
 | `test_resource_errors.py` | ✅ |
 | `test_indexing.py` | ✅ |
+| `test_layer2_controller.py` | ✅ |
+| `test_model_calls.py` | ✅ |
 
 ---
 
@@ -315,7 +330,7 @@ Structure (trees) beats blind recursion
 
 * ✅ **`TokenTracker` wiring** — root and recursive LLM token usage is recorded and exposed by `ExecutionMonitor`
 * ✅ **Sandbox escape mitigation** — strict execution now validates imports/dunder access and uses a killable worker when a timeout is configured; this is still not a container-level security boundary
-* ⚠️ **Planner is a stub** — minimal policy (READ_CHUNK → GENERATE_CODE → STOP), no learned planning
+* ⚠️ **Planning remains heuristic** — bounded phase/progress policy, not learned or formally verified planning
 
 ### Future Evolution Path
 
@@ -457,7 +472,9 @@ project-root/
     ├── test_pdf_ingestion.py
     ├── test_pdf1_acceptance.py
     ├── test_resource_errors.py
-    └── test_indexing.py
+    ├── test_indexing.py
+    ├── test_layer2_controller.py
+    └── test_model_calls.py
 ```
 
 ---

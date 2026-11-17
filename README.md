@@ -1,7 +1,7 @@
 # RLM Engine — Recursive Language Model
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-242%20passing-brightgreen.svg)](#-testing)
+[![Tests](https://img.shields.io/badge/tests-350%20passing-brightgreen.svg)](#-testing)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 > **A controlled reasoning engine that thinks under control, under cost, and under verification.**
@@ -327,12 +327,13 @@ Recoverable resource failures are reported with stable error codes:
 The PDF and engine CLIs print an actionable error to stderr and exit with status
 1. Python conversion/mount APIs raise `shared.resource_errors.ResourceExhaustedError`
 with a `.code`; worker death raises `WorkerTerminatedError`. `RuntimeEngine.execute()`
-returns `ok=False`, `error`, and `error_code`. The multi-round controller stops and
-passes the exception to its caller instead of returning an empty/successful answer
-or making further LLM calls.
+returns `ok=False`, `error`, and `error_code`. The multi-round controller returns a
+failed `RunOutcome`, without a final answer or further LLM calls. Calling
+`outcome.require_answer()` raises `RunFailedError` on any noncompleted outcome.
 
-The demo API returns `{"error": "...", "code": "..."}` with HTTP 503 for resource
-exhaustion and HTTP 502 for unexpected worker termination. Interrupted conversion
+The demo API returns a structured error with HTTP 503 for resource exhaustion,
+502 for unexpected worker termination, 504 for model/run timeouts, 429 for
+exhausted rate-limit recovery, and 422 for incomplete/cancelled runs. Interrupted conversion
 attempts clean up owned temporary artifacts when the process can unwind; they do
 not publish partial documents.
 
@@ -389,7 +390,7 @@ The system is organized into **8 distinct layers**, each with a single responsib
 ├──────────────────┼──────────────────────────────────────┤
 │  L5 Context      │ Probe, filter, chunk, traverse       │
 ├──────────────────┼──────────────────────────────────────┤
-│  L6 Output       │ Intermediate store → FINAL() lock    │
+│  L6 Output       │ Legacy aggregation / answer helpers  │
 ├──────────────────┼──────────────────────────────────────┤
 │  L7 Control      │ Step limits, budget, recursion guard  │
 ├──────────────────┼──────────────────────────────────────┤
@@ -400,17 +401,103 @@ The system is organized into **8 distinct layers**, each with a single responsib
 ### How It Works
 
 1. **Mount** — Your prompt/document is mounted as a protected `context` variable in a Python sandbox
-2. **Generate** — The root LLM (Llama 3.3-70B) generates Python code to explore the context
-3. **Execute** — Validated code runs in a killable worker with stdout capture
+2. **Generate** — The root LLM returns one locally validated JSON action
+3. **Execute** — Code runs in a killable worker with bounded stdout capture
 4. **Recurse** — Generated code can call `llm_query()` to delegate to a sub-LLM (Llama 3.1-8B)
-5. **Iterate** — REPL output feeds back to the LLM for the next round
-6. **Finalize** — The LLM emits `FINAL(answer)` to lock the output
+5. **Iterate** — Bounded observations, diagnostics, state summaries, and evidence references feed back to the LLM
+6. **Finalize** — A validated finalization action produces a completed `RunOutcome`; limits and failures never become answers
+
+### Layer 2: structured actions and typed outcomes
+
+The primary loop accepts exactly one JSON object per response:
+
+```json
+{"action":"execute","phase":"inspect","code":"source = read_context(0, min(len(context), 500))\nresult = source['text']"}
+```
+
+After observing the returned reference, the model can finalize a computed variable:
+
+```json
+{"action":"finalize_variable","name":"result","evidence":[{"document_hash":"<copy the actual hash returned by read_context>","start_char":0,"end_char":500}]}
+```
+
+The example's hash and end offset must be replaced with the exact reference
+returned by the tool. `finalize` alternatively accepts a `text` string and the
+same evidence list. Unknown fields, mixed actions, duplicate JSON keys, invalid
+references, missing variables, and oversized responses are rejected. Apostrophes,
+parentheses, Unicode, or `FINAL(...)` text inside a string do not change the action.
+Malformed responses/finalizations get at most two correction attempts by default.
+
+**Python API migration:** `run_until_done()` now returns `RunOutcome`, not
+`FinalAnswer`. Use:
+
+```python
+outcome = controller.run_until_done(ctx, query)
+if outcome.ok:
+    answer = outcome.require_answer()
+    print(outcome.verification)
+else:
+    print(outcome.status, outcome.stop_reason, outcome.error_code)
+    print(outcome.partial_candidate)  # Explicitly not a final answer
+```
+
+Terminal statuses are `completed`, `failed`, `incomplete`, and `cancelled`.
+Round/step exhaustion, deadline expiry, repeated actions, and lack of observable
+progress return explicit noncompleted outcomes. Provider/API failures are typed
+failures, not exception strings masquerading as answers. Missing variables are
+not substituted with empty text. Empty answers require an explicit Python policy.
+
+**Evidence:** `read_context(start_char, end_char)` records host-owned source reads
+(up to 4,096 characters each, 64 distinct spans per run). Final evidence must match
+the document SHA-256 and previously issued spans. At least one successful execution
+is required before finalization. `provenance_validated` means the referenced source
+was read and is unchanged—not that every claim follows from it. An optional trusted
+external verifier can reject candidates; only its acceptance yields
+`externally_verified`. `--allow-unverified` explicitly permits answers without
+source references and labels them `unverified`.
+
+**Bounds and recovery:**
+
+- Host-owned phase guidance (`inspect/retrieve/analyze/synthesize`), action/state
+  fingerprints, and bounded repeated-action/no-progress/failure thresholds.
+  These are progress heuristics, not proof of useful semantic reasoning.
+- Stdout is captured as a bounded head/tail (64 Ki characters at runtime by
+  default), then previewed separately from errors. The latest diagnostic survives
+  history compaction. Outcomes retain up to 128 recent observations and report drops.
+- Deterministic history compaction keeps bounded state summaries and source
+  reference catalogs, not potentially hallucinatory model-written summaries.
+  Omitted older raw output is counted; source evidence can be reread by span.
+- Input allowance reserves model output plus a safety margin. The default token
+  counter is a conservative UTF-8-byte estimate, not an exact model tokenizer;
+  custom model callers can supply a tokenizer-based counter.
+- One retry owner: transient timeouts, connection failures, rate limits, and 5xx
+  responses have bounded backoff/retries. Permanent errors are not retried.
+  Requests carry timeouts bounded by the remaining run deadline; SDK retries are off.
+- Root/subcalls share an atomic input-plus-output reservation budget. Known usage
+  is recorded even after overruns. Missing usage/failed requests conservatively
+  charge the reservation and expose `usage_uncertain`/`run_uncertain_charged`;
+  these are not claims of actual billed tokens. Provider-estimate errors can still
+  exceed a billing estimate; the engine records the overrun and stops.
+- Budgets and execution-step caps belong to the constructed system and are not
+  silently reset between runs. Build a new system for a fresh independent budget.
+- `controller.cancel()` terminates an active execution worker and discards late
+  model responses. In-flight synchronous provider calls can remain blocked until
+  their request timeout. Trusted inline execution (`timeout_seconds=None`) and
+  arbitrary verifier callbacks cannot be forcibly preempted.
+
+`FINAL(...)`/`FINAL_VAR(...)` are supported only by explicitly selecting
+`--protocol legacy --allow-unverified`; they are never an automatic fallback.
+The legacy `run_round()`/`CodeGenerator.generate()` APIs remain for single-round
+code-emitter integrations. Custom model callables must accept `max_tokens` and
+`timeout_seconds` keyword arguments and return `(text, total_tokens_or_None)`.
+Temporary `context` rebinding remains unchanged and is not prohibited.
 
 ### Tools Available in the REPL
 
 | Tool | Description |
 |------|-------------|
-| `llm_query(prompt)` | Query a sub-LLM (~200K char context) |
+| `llm_query(prompt)` | Query a sub-LLM within the supplied subcall/token/deadline limits |
+| `read_context(start, end)` | Read a bounded source span and issue a provenance reference |
 | `peek_head(n)` | Read first `n` chars of context |
 | `peek_tail(n)` | Read last `n` chars of context |
 | `by_keyword(*kw)` | Filter lines by keywords |
@@ -432,11 +519,22 @@ All settings live in [`configs/default.yaml`](configs/default.yaml):
 | `max_steps` | 100 | Hard cap on execution steps |
 | `max_recursion_depth` | 5 | Max depth for nested `llm_query()` calls |
 | `token_budget` | 100,000 | Total token budget across all LLM calls |
-| `max_rounds` | 20 | Max REPL iterations before forced finalization |
+| `max_rounds` | 20 | Max model actions; exhaustion returns incomplete |
 | `stdout_truncation` | 3,000 | Chars of `print()` output fed back per round |
 | `root_model` | `llama-3.3-70b-versatile` | Root controller LLM |
 | `sub_model` | `llama-3.1-8b-instant` | Sub-call LLM for `llm_query()` |
 | `sandbox_strict` | `true` | Restrict imports, introspection, and dangerous builtins |
+| `protocol` | `json` | Strict JSON actions; legacy format requires explicit opt-in |
+| `require_evidence` | `true` | Require issued source references at finalization |
+| `max_repairs` | 2 | Total invalid-action/finalization correction allowance |
+| `max_execution_failures` | 3 | Consecutive execution failures before termination |
+| `max_repeated_actions` | 2 | Repetitions allowed for the same code/state/evidence signature |
+| `max_stagnant_steps` | 3 | Consecutive unchanged-state/evidence observations |
+| `max_input_tokens` | 24,000 | Input allowance using the configured token counter |
+| `context_window_tokens` | 32,768 | Model context allowance; reserve output and safety margin |
+| `output_tokens` | 4,096 | Root completion-token allowance |
+| `max_provider_attempts` | 3 | Maximum provider attempts per logical request |
+| `request_timeout_seconds` | 30 | Per-attempt timeout, also bounded by run deadline |
 
 ---
 
@@ -464,11 +562,14 @@ pytest -q -m resources
 # Run persistent indexing, metadata, and DRAM cache tests
 pytest -q -m indexing
 
+# Run structured controller, evidence, and provider-accounting tests
+pytest -q -m controller
+
 # Verbose output
 pytest -v
 ```
 
-**Current local status (Tesseract and OCR extras available): 242 passing across 13 test suites.**
+**Current local status (Tesseract and OCR extras available): 350 passing across 15 test suites.**
 The real-OCR test requires Tesseract and the OCR extras and is mandatory in the
 `pdf-test` Docker target.
 
@@ -483,6 +584,8 @@ See [`tests/README.md`](tests/README.md) for the storage contract and CI coverag
 | `test_pdf_ingestion.py` | Scanned/mixed PDF edge cases, OCR limits/errors, and malformed inputs |
 | `test_pdf1_acceptance.py` | 49 real-paper acceptance cases: extraction, page landmarks, caching, retrieval, RAM/disk, and CLI |
 | `test_code_generator.py` | Layer 2: LLM output → executable Python |
+| `test_layer2_controller.py` | Strict actions, typed outcomes, evidence, lifecycle, history, cancellation, and CLI/API failures |
+| `test_model_calls.py` | Reservations, unknown/overrun accounting, retries, timeouts, subcall resets, and Groq transport configuration |
 | `test_recursion.py` | Layer 4: sub-LLM invocation via guard |
 | `test_output.py` | Layer 6: intermediate → FINAL aggregation |
 | `test_control.py` | Layer 7: step limits, budget, recursion guard |

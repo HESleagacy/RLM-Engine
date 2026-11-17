@@ -2,6 +2,7 @@
 
 import errno
 import importlib
+import json
 import os
 from pathlib import Path
 import signal
@@ -280,26 +281,30 @@ def test_controller_stops_after_resource_failure_instead_of_making_more_llm_call
 
     def chat(*args, **kwargs):
         calls.append(True)
-        return "```repl\nresult = fail()\n```", 0
+        return json.dumps({"action": "execute", "code": "result = fail()"}), 0
 
     controller.runtime.tools.register("fail", fail)
     controller.codegen = CodeGenerator(chat=chat)
-    with pytest.raises(ResourceExhaustedError):
-        controller.run_until_done(MountedContext("context"), "query")
+    outcome = controller.run_until_done(MountedContext("context"), "query")
+    assert outcome.status == "failed"
+    assert outcome.error_code == "out_of_memory"
+    assert outcome.answer is None
     assert calls == [True]
     assert controller.output.intermediate.all() == ()
 
 
 def test_controller_passes_worker_death_to_caller(monkeypatch):
     controller, _ = main_module.build_system(main_module.default_config_path())
-    responses = iter(["```repl\nresult = 1\n```"])
+    responses = iter([json.dumps({"action": "execute", "code": "result = 1"})])
     controller.codegen = CodeGenerator(chat=lambda *args, **kwargs: (next(responses), 0))
     monkeypatch.setattr(controller.runtime, "execute", lambda code: ExecutionResult(
         ok=False, error="Worker exited without a result; cause unknown",
         error_code="worker_terminated",
     ))
-    with pytest.raises(WorkerTerminatedError):
-        controller.run_until_done(MountedContext("context"), "query")
+    outcome = controller.run_until_done(MountedContext("context"), "query")
+    assert outcome.status == "failed"
+    assert outcome.error_code == "worker_terminated"
+    assert outcome.answer is None
 
 
 def test_codegen_memory_failure_is_not_returned_as_a_successful_final_answer():
@@ -309,8 +314,10 @@ def test_codegen_memory_failure_is_not_returned_as_a_successful_final_answer():
         raise MemoryError()
 
     controller.codegen = CodeGenerator(chat=chat)
-    with pytest.raises(ResourceExhaustedError):
-        controller.run_until_done(MountedContext("context"), "query")
+    outcome = controller.run_until_done(MountedContext("context"), "query")
+    assert outcome.status == "failed"
+    assert outcome.error_code == "out_of_memory"
+    assert outcome.answer is None
 
 
 @pytest.mark.parametrize("target", ["pdf", "engine"])

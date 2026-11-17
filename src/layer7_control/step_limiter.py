@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from shared.model_errors import StepLimitError
 
 
 @dataclass
@@ -19,5 +20,5 @@ class StepLimiter:
 
     def tick(self) -> None:
         if not self.allow():
-            raise RuntimeError("step limit exceeded")
+            raise StepLimitError("step limit exceeded")
         self.current += 1

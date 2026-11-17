@@ -14,5 +14,8 @@ class ToolInterface:
     def register(self, name: str, fn: Callable[..., Any]) -> None:
         self._tools[name] = fn
 
+    def unregister(self, name: str) -> None:
+        self._tools.pop(name, None)
+
     def as_namespace(self) -> dict[str, Any]:
         return dict(self._tools)

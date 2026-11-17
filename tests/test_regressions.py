@@ -1,9 +1,12 @@
 import time
+import hashlib
+import json
 
 import pytest
 
 from layer1_input import MountedContext
-from layer2_controller.code_generator import CodeGenerator, StepResult, _parse_step
+from layer2_controller.code_generator import CodeGenerator
+from layer2_controller.protocol import Action, EvidenceRef, parse_action
 from layer2_controller.controller import RootController
 from layer3_execution import RuntimeEngine, StateStore, ToolInterface
 from layer7_control import BudgetManager, StepLimiter
@@ -73,14 +76,14 @@ def test_temporary_rebinding_does_not_replace_mounted_context_or_query(tmp_path,
 
 
 def test_controller_parser_handles_parentheses_in_final_answer():
-    result = _parse_step("FINAL(The answer is f(x) = 42.)")
+    result = parse_action(json.dumps({"action": "finalize", "text": "The answer is f(x) = 42."}))
 
-    assert result.is_final
-    assert result.final_text == "The answer is f(x) = 42."
+    assert result.action == "finalize"
+    assert result.text == "The answer is f(x) = 42."
 
 
 def test_codegen_only_detects_real_result_assignment():
-    def llm(_prompt: str, *, max_tokens: int | None = None) -> tuple[str, int]:
+    def llm(_prompt: str, *, max_tokens: int | None = None, timeout_seconds=None) -> tuple[str, int]:
         return ("# result is mentioned here\nvalue = 3", 1)
 
     code = CodeGenerator(llm).generate("test", "context")
@@ -113,8 +116,11 @@ def test_controller_resets_state_between_invocations():
         def generate_step(self, **_kwargs):
             self.answer += 1
             if self.answer % 2:
-                return StepResult(raw="code", code="result = query")
-            return StepResult(raw="FINAL_VAR(result)", is_final=True, final_var="result")
+                return Action("execute", code="source = read_context(0, len(context))\nresult = query")
+            return Action(
+                "finalize_variable", name="result",
+                evidence=(EvidenceRef(hashlib.sha256(b"context").hexdigest(), 0, 7),),
+            )
 
     controller = RootController(
         RuntimeEngine(StateStore(), ToolInterface(), timeout_seconds=None),
@@ -126,5 +132,5 @@ def test_controller_resets_state_between_invocations():
     first = controller.run_until_done(context, "first")
     second = controller.run_until_done(context, "second")
 
-    assert first.text == "first"
-    assert second.text == "second"
+    assert first.require_answer() == "first"
+    assert second.require_answer() == "second"
